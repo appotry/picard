@@ -3,7 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2019-2021 Philipp Wolfer
-# Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2020-2022 Laurent Monin
+# Copyright (C) 2024 Giorgio Fontanive
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -56,9 +57,9 @@ class DummyUnsupportedCoverArt(CoverArtImage):
         self.width = 100
         self.height = 100
         self.extension = '.cvr'
-        self.set_data(data)
+        self.set_tags_data(data)
 
-    def set_data(self, data):
+    def set_tags_data(self, data):
         self._data = data
         self.datalength = len(data)
 

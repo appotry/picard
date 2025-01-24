@@ -3,10 +3,13 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2019 Zenara Daley
-# Copyright (C) 2019-2020 Laurent Monin
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2021, 2023-2024 Philipp Wolfer
+# Copyright (C) 2019-2022 Laurent Monin
 # Copyright (C) 2020 raingloom
 # Copyright (C) 2021 Sophist-UK
+# Copyright (C) 2024 Giorgio Fontanive
+# Copyright (C) 2024 Suryansh Shakya
+# Copyright (C) 2024 YohayAiTe
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -371,6 +374,26 @@ class CommonId3Tests:
             self.assertEqual(metadata['lyrics:foo'], loaded_metadata['lyrics:foo'])
 
         @skipUnlessTestfile
+        def test_syncedlyrics_preserve_language_and_description(self):
+            metadata = Metadata({'syncedlyrics': '[00:00.000]<00:00.000>foo1'})
+            metadata.add('syncedlyrics:deu:desc', '[00:00.000]<00:00.000>foo2')
+            metadata.add('syncedlyrics:ita', '[00:00.000]<00:00.000>foo3')
+            metadata.add('syncedlyrics::desc', '[00:00.000]<00:00.000>foo4')
+            loaded_metadata = save_and_load_metadata(self.filename, metadata)
+            self.assertEqual(metadata['syncedlyrics'], loaded_metadata['syncedlyrics:eng'])
+            self.assertEqual(metadata['syncedlyrics:deu:desc'], loaded_metadata['syncedlyrics:deu:desc'])
+            self.assertEqual(metadata['syncedlyrics:ita'], loaded_metadata['syncedlyrics:ita'])
+            self.assertEqual(metadata['syncedlyrics::desc'], loaded_metadata['syncedlyrics:eng:desc'])
+
+        @skipUnlessTestfile
+        def test_syncedlyrics_delete(self):
+            metadata = Metadata({'syncedlyrics': '[00:00.000]<00:00.000>foo1'})
+            metadata.delete('syncedlyrics:eng')
+            save_metadata(self.filename, metadata)
+            raw_metadata = load_raw(self.filename)
+            self.assertNotIn('syncedlyrics:eng', raw_metadata)
+
+        @skipUnlessTestfile
         def test_invalid_track_and_discnumber(self):
             metadata = Metadata({
                 'discnumber': 'notanumber',
@@ -582,6 +605,26 @@ class CommonId3Tests:
             self.assertEqual(file.similarity, 1.0)
             self.assertEqual(file.state, File.NORMAL)
 
+        @skipUnlessTestfile
+        def test_releasedate_v23(self):
+            config.setting['write_id3v23'] = True
+            metadata = Metadata({
+                'releasedate': '2023-04-28',
+            })
+            save_metadata(self.filename, metadata)
+            raw_metadata = load_raw(self.filename)
+            self.assertEqual(metadata['releasedate'], raw_metadata['TXXX:RELEASEDATE'])
+
+        @skipUnlessTestfile
+        def test_releasedate_v24(self):
+            config.setting['write_id3v23'] = False
+            metadata = Metadata({
+                'releasedate': '2023-04-28',
+            })
+            save_metadata(self.filename, metadata)
+            raw_metadata = load_raw(self.filename)
+            self.assertEqual(metadata['releasedate'], raw_metadata['TDRL'])
+
 
 class MP3Test(CommonId3Tests.Id3TestCase):
     testfile = 'test.mp3'
@@ -590,6 +633,7 @@ class MP3Test(CommonId3Tests.Id3TestCase):
         'length': 156,
         '~channels': '2',
         '~sample_rate': '44100',
+        '~filesize': '2760',
     }
     unexpected_info = ['~video']
 
@@ -621,6 +665,7 @@ class TTATest(CommonId3Tests.Id3TestCase):
     expected_info = {
         'length': 82,
         '~sample_rate': '44100',
+        '~filesize': '2300',
     }
     unexpected_info = ['~video']
 
@@ -634,6 +679,7 @@ class DSFTest(CommonId3Tests.Id3TestCase):
         '~sample_rate': '5644800',
         '~bitrate': '11289.6',
         '~bits_per_sample': '1',
+        '~filesize': '112988',
     }
     unexpected_info = ['~video']
 
@@ -648,6 +694,7 @@ if id3.DSDIFFFile:
             '~sample_rate': '5644800',
             '~bitrate': '11289.6',
             '~bits_per_sample': '1',
+            '~filesize': '14242',
         }
         unexpected_info = ['~video']
 
@@ -659,6 +706,7 @@ if id3.DSDIFFFile:
             '~channels': '2',
             '~sample_rate': '5644800',
             '~bits_per_sample': '1',
+            '~filesize': '2214',
         }
         unexpected_info = ['~video']
 
@@ -671,6 +719,7 @@ class AIFFTest(CommonId3Tests.Id3TestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~bitrate': '1411.2',
+        '~filesize': '14662',
     }
     unexpected_info = ['~video']
 
@@ -729,3 +778,47 @@ class ID3FileTest(PicardTestCase):
         }
         metadata = self.file.metadata
         self.assertEqual(['foo; bar'], self.file.format_specific_metadata(metadata, 'artist', settings))
+
+    def test_syncedlyrics_converting_to_lrc(self):
+        sylt = (
+            [("Test", 0), ("normal\n", 500), ("behaviour", 1000)],
+            [("Test", 0), ("syl", 10), ("la", 20), ("bles", 30)],
+            [("Test newline\nin the middle", 0), ("of the text", 1000)],
+            [("Test empty lyrics at the end\n", 0), ("", 1000)],
+            [("Test timestamp estimation", 0), ("in the\nlast phrase", 1000)])
+        correct_lrc = (
+            "[00:00.000]<00:00.000>Test<00:00.500>normal\n[00:01.000]<00:01.000>behaviour",
+            "[00:00.000]<00:00.000>Test<00:00.010>syl<00:00.020>la<00:00.030>bles",
+            "[00:00.000]<00:00.000>Test newline\n[00:00.480]in the middle<00:01.000>of the text",
+            "[00:00.000]<00:00.000>Test empty lyrics at the end\n[00:01.000]<00:01.000>",
+            "[00:00.000]<00:00.000>Test timestamp estimation<00:01.000>in the\n[00:01.352]last phrase")
+        for sylt, correct_lrc in zip(sylt, correct_lrc):
+            lrc = self.file._parse_sylt_text(sylt, 2)
+            self.assertEqual(lrc, correct_lrc)
+
+    def test_syncedlyrics_converting_to_sylt(self):
+        lrc = (
+            "[00:00.000]<00:00.000>Test<00:00.500>normal\n[00:00.750]<00:01.000>behaviour",
+            "[00:00.000]Test lyrics with\n[01:00.000]only line time stamps",
+            "<00:00.000>Test lyrics with<01:00.000>only syllable time stamps",
+            "[00:00.000]<00:00.000>Test extra\n<00:00.750>[00:00.750]<00:00.750>timestamp<00:01.500>",
+            "[00:01.00]<00:01.00>Test lyrics with two\n[00:01.75]<00:01.75>digit ms",
+            "[01:01.0]<01:01.000>Test lyrics with different\n[01:01.8]<01:01.7506>digit ms",
+            "[2:1.0]<2:1.0>Test lyrics with single digits\n[2:2]<2:2>or no ms",
+            "[300:1.000]<300:1.000>Test lyrics with long minutes",
+            "Test invalid[00:00.000]input\nTest invalid[00:01.000]input",
+            "Test lyrics with no timestamps")
+        correct_sylt = (
+            [("Test", 0), ("normal\n", 500), ("behaviour", 1000)],
+            [("Test lyrics with\n", 0), ("only line time stamps", 60 * 1000)],
+            [("Test lyrics with", 0), ("only syllable time stamps", 60 * 1000)],
+            [("Test extra\n", 0), ("timestamp", 750), ("", 1500)],
+            [("Test lyrics with two\n", 1000), ("digit ms", 1750)],
+            [("Test lyrics with different\n", 61000), ("digit ms", 61750)],
+            [("Test lyrics with single digits\n", 121000), ("or no ms", 122000)],
+            [("Test lyrics with long minutes", (300*60+1)*1000)],
+            [("input\nTest invalid", 0), ("input", 1000)],
+            [])
+        for lrc, correct_sylt in zip(lrc, correct_sylt):
+            sylt = self.file._parse_lrc_text(lrc)
+            self.assertEqual(sylt, correct_sylt)

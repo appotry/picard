@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>466</width>
-    <height>735</height>
+    <height>543</height>
    </rect>
   </property>
   <layout class="QVBoxLayout">
@@ -95,7 +95,7 @@
      </property>
      <layout class="QVBoxLayout">
       <item>
-       <widget class="QCheckBox" name="toolbar_multiselect">
+       <widget class="QCheckBox" name="allow_multi_dirs_selection">
         <property name="text">
          <string>Allow selection of multiple directories</string>
         </property>
@@ -116,9 +116,23 @@
        </widget>
       </item>
       <item>
+       <widget class="QCheckBox" name="new_user_dialog">
+        <property name="text">
+         <string>Show the new user dialog when starting Picard</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="QCheckBox" name="quit_confirmation">
         <property name="text">
          <string>Show a quit confirmation dialog for unsaved changes</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="file_save_warning">
+        <property name="text">
+         <string>Show a confirmation dialog when saving files</string>
         </property>
        </widget>
       </item>
@@ -154,7 +168,7 @@
            <bool>false</bool>
           </property>
           <property name="text">
-           <string>Browse...</string>
+           <string>Browse…</string>
           </property>
          </widget>
         </item>
@@ -185,115 +199,17 @@
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="customize_toolbar_box">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
      </property>
-     <property name="title">
-      <string>Customize Action Toolbar</string>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>40</height>
+      </size>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout">
-      <item>
-       <widget class="QListWidget" name="toolbar_layout_list">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-          <horstretch>0</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QWidget" name="edit_button_box" native="true">
-        <layout class="QHBoxLayout" name="edit_box_layout">
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QToolButton" name="add_button">
-           <property name="toolTip">
-            <string>Add a new button to Toolbar</string>
-           </property>
-           <property name="text">
-            <string>Add Action</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QToolButton" name="insert_separator_button">
-           <property name="toolTip">
-            <string>Insert a separator</string>
-           </property>
-           <property name="text">
-            <string>Add Separator</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <spacer name="button_box_spacer">
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-           <property name="sizeType">
-            <enum>QSizePolicy::MinimumExpanding</enum>
-           </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>50</width>
-             <height>20</height>
-            </size>
-           </property>
-          </spacer>
-         </item>
-         <item>
-          <widget class="QToolButton" name="up_button">
-           <property name="toolTip">
-            <string>Move selected item up</string>
-           </property>
-           <property name="icon">
-            <iconset theme=":/images/16x16/go-up.png">
-             <normaloff>.</normaloff>.</iconset>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QToolButton" name="down_button">
-           <property name="toolTip">
-            <string>Move selected item down</string>
-           </property>
-           <property name="icon">
-            <iconset theme=":/images/16x16/go-down.png">
-             <normaloff>.</normaloff>.</iconset>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QToolButton" name="remove_button">
-           <property name="toolTip">
-            <string>Remove button from toolbar</string>
-           </property>
-           <property name="text">
-            <string>Remove</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-     </layout>
-    </widget>
+    </spacer>
    </item>
   </layout>
  </widget>
@@ -302,20 +218,16 @@
   <tabstop>show_menu_icons</tabstop>
   <tabstop>ui_language</tabstop>
   <tabstop>ui_theme</tabstop>
-  <tabstop>toolbar_multiselect</tabstop>
+  <tabstop>allow_multi_dirs_selection</tabstop>
   <tabstop>builtin_search</tabstop>
   <tabstop>use_adv_search_syntax</tabstop>
+  <tabstop>new_user_dialog</tabstop>
   <tabstop>quit_confirmation</tabstop>
+  <tabstop>file_save_warning</tabstop>
   <tabstop>filebrowser_horizontal_autoscroll</tabstop>
   <tabstop>starting_directory</tabstop>
   <tabstop>starting_directory_path</tabstop>
   <tabstop>starting_directory_browse</tabstop>
-  <tabstop>toolbar_layout_list</tabstop>
-  <tabstop>add_button</tabstop>
-  <tabstop>insert_separator_button</tabstop>
-  <tabstop>up_button</tabstop>
-  <tabstop>down_button</tabstop>
-  <tabstop>remove_button</tabstop>
  </tabstops>
  <resources/>
  <connections/>

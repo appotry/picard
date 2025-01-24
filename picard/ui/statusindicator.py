@@ -2,9 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2023 Philipp Wolfer
 # Copyright (C) 2020 Julius Michaelis
-# Copyright (C) 2020-2021 Laurent Monin
+# Copyright (C) 2020-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2021 Gabriel Ferreira
 #
 # This program is free software; you can redistribute it and/or
@@ -22,6 +22,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
+from picard import log
 from picard.const.sys import (
     IS_HAIKU,
     IS_MACOS,
@@ -32,16 +33,26 @@ from picard.const.sys import (
 DesktopStatusIndicator = None
 
 
+class ProgressStatus:
+
+    def __init__(self, files=0, albums=0, pending_files=0, pending_requests=0, progress=0):
+        self.files = files
+        self.albums = albums
+        self.pending_files = pending_files
+        self.pending_requests = pending_requests
+        self.progress = progress
+
+
 class AbstractProgressStatusIndicator:
     def __init__(self):
         self._max_pending = 0
         self._last_pending = 0
 
-    def update(self, files=0, albums=0, pending_files=0, pending_requests=0, progress=0):
+    def update(self, progress_status):
         if not self.is_available:
             return
 
-        total_pending = pending_files + pending_requests
+        total_pending = progress_status.pending_files + progress_status.pending_requests
         if total_pending == self._last_pending:
             return  # No changes, avoid update
 
@@ -54,7 +65,7 @@ class AbstractProgressStatusIndicator:
             self.hide_progress()
             return
 
-        self.set_progress(progress)
+        self.set_progress(progress_status.progress)
 
     @property
     def is_available(self):
@@ -67,46 +78,49 @@ class AbstractProgressStatusIndicator:
         raise NotImplementedError
 
 
-if IS_WIN:
-    from PyQt5.QtWinExtras import QWinTaskbarButton
+# FIXME: QtWinExtras got removed in Qt6
+# See: https://www.qt.io/blog/qt-extras-modules-in-qt-6
+#      https://bugreports.qt.io/browse/QTBUG-89564
+#      https://bugreports.qt.io/browse/QTBUG-94008
+# if IS_WIN:
+#     from PyQt6.QtWinExtras import QWinTaskbarButton
 
-    class WindowsTaskbarStatusIndicator(AbstractProgressStatusIndicator):
-        def __init__(self, window):
-            super().__init__()
-            taskbar_button = QWinTaskbarButton(window)
-            taskbar_button.setWindow(window)
-            self._progress = taskbar_button.progress()
+#     class WindowsTaskbarStatusIndicator(AbstractProgressStatusIndicator):
+#         def __init__(self, window):
+#             super().__init__()
+#             taskbar_button = QWinTaskbarButton(window)
+#             taskbar_button.setWindow(window)
+#             self._progress = taskbar_button.progress()
 
-        @property
-        def is_available(self):
-            return bool(self._progress)
+#         @property
+#         def is_available(self):
+#             return bool(self._progress)
 
-        def hide_progress(self):
-            self._progress.hide()
+#         def hide_progress(self):
+#             self._progress.hide()
 
-        def set_progress(self, progress):
-            self._progress.setValue(int(progress * 100))
-            self._progress.show()
+#         def set_progress(self, progress):
+#             self._progress.setValue(int(progress * 100))
+#             self._progress.show()
 
-    DesktopStatusIndicator = WindowsTaskbarStatusIndicator
+#     DesktopStatusIndicator = WindowsTaskbarStatusIndicator
 
-elif not (IS_MACOS or IS_HAIKU):
+if not (IS_WIN or IS_MACOS or IS_HAIKU):
     QDBusConnection = None
 
     try:
-        from PyQt5.QtCore import (
-            Q_CLASSINFO,
+        from PyQt6.QtCore import (
             QObject,
             pyqtSlot,
         )
-        from PyQt5.QtDBus import (
+        from PyQt6.QtDBus import (
             QDBusAbstractAdaptor,
             QDBusConnection,
             QDBusMessage,
         )
 
-    except ImportError:
-        pass
+    except ImportError as err:
+        log.warning('Failed importing PyQt6.QtDBus: %r', err)
 
     else:
 
@@ -129,8 +143,8 @@ elif not (IS_MACOS or IS_HAIKU):
             @property
             def current_progress(self):
                 return {
-                    "progress": self._progress,
-                    "progress-visible": self._visible,
+                    'progress': self._progress,
+                    'progress-visible': self._visible,
                 }
 
             @property
@@ -151,20 +165,21 @@ elif not (IS_MACOS or IS_HAIKU):
                 return [self._app_uri, self.current_progress]
 
         class UnityLauncherEntryAdaptor(QDBusAbstractAdaptor):
-            """ This provides the DBus adaptor to the outside world"""
+            """ This provides the DBus adaptor to the outside world
 
-            Q_CLASSINFO("D-Bus Interface", DBUS_INTERFACE)
-            Q_CLASSINFO("D-Bus Introspection",
-                '<interface name="%s">\n'
-                '  <signal name="Update">\n'
-                '    <arg direction="out" type="s" name="app_uri"/>\n'
-                '    <arg direction="out" type="a{sv}" name="properties"/>\n'
-                '  </signal>\n'
-                '  <method name="Query">\n'
-                '    <arg direction="out" type="s" name="app_uri"/>\n'
-                '    <arg direction="out" type="a{sv}" name="properties"/>\n'
-                '  </method>\n'
-                '</interface>' % DBUS_INTERFACE)
+            The supported interface is:
+
+                <interface name="com.canonical.Unity.LauncherEntry">
+                  <signal name="Update">
+                    <arg direction="out" type="s" name="app_uri"/>
+                    <arg direction="out" type="a{sv}" name="properties"/>
+                  </signal>
+                  <method name="Query">
+                    <arg direction="out" type="s" name="app_uri"/>
+                    <arg direction="out" type="a{sv}" name="properties"/>
+                  </method>
+                </interface>
+            """
 
             def __init__(self, parent):
                 super().__init__(parent)

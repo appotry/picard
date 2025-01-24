@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2018-2020 Philipp Wolfer
-# Copyright (C) 2019-2020 Laurent Monin
+# Copyright (C) 2018-2020, 2022 Philipp Wolfer
+# Copyright (C) 2019-2022, 2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -26,9 +26,9 @@ from test.picardtestcase import PicardTestCase
 
 from picard import config
 from picard.const.sys import IS_WIN
+from picard.extension_points.script_functions import register_script_function
 from picard.file import File
 from picard.metadata import Metadata
-from picard.script import register_script_function
 from picard.util.scripttofilename import (
     script_to_filename,
     script_to_filename_with_metadata,
@@ -39,6 +39,9 @@ settings = {
     'ascii_filenames': False,
     'enabled_plugins': [],
     'windows_compatibility': False,
+    'win_compat_replacements': {},
+    'replace_spaces_with_underscores': False,
+    'replace_dir_separator': '_',
 }
 
 
@@ -115,6 +118,39 @@ class ScriptToFilenameTest(PicardTestCase):
         filename = script_to_filename('%artist%?', metadata, settings=settings)
         self.assertEqual(expect_compat, filename)
 
+    def test_windows_compatibility_custom_replacements(self):
+        metadata = Metadata()
+        metadata['artist'] = '\\*:'
+        expect_compat = '_+_!'
+        settings = config.setting.copy()
+        settings['windows_compatibility'] = True
+        settings['win_compat_replacements'] = {
+            '*': '+',
+            '?': '!',
+        }
+        filename = script_to_filename('%artist%?', metadata, settings=settings)
+        self.assertEqual(expect_compat, filename)
+
+    def test_replace_spaces_with_underscores(self):
+        metadata = Metadata()
+        metadata['artist'] = ' The \t  New* _ Artist  '
+        settings = config.setting.copy()
+        settings['windows_compatibility'] = True
+        settings['replace_spaces_with_underscores'] = False
+        filename = script_to_filename('%artist%', metadata, settings=settings)
+        self.assertEqual(' The \t  New_ _ Artist  ', filename)
+        settings['replace_spaces_with_underscores'] = True
+        filename = script_to_filename('%artist%', metadata, settings=settings)
+        self.assertEqual('The_New_Artist', filename)
+
+    def test_replace_dir_separator(self):
+        metadata = Metadata()
+        metadata['artist'] = 'AC/DC'
+        settings = config.setting.copy()
+        settings['replace_dir_separator'] = '-'
+        filename = script_to_filename('/music/%artist%', metadata, settings=settings)
+        self.assertEqual('/music/AC-DC', filename)
+
     @unittest.skipUnless(IS_WIN, "windows test")
     def test_ascii_win_save(self):
         self._test_ascii_windows_compatibility()
@@ -141,7 +177,7 @@ class ScriptToFilenameTest(PicardTestCase):
         filename = script_to_filename('a\tb\nc', metadata)
         self.assertEqual('abc', filename)
 
-    def test_preserve_leading_and_trailing_whitespace(self):
+    def test_remove_leading_and_trailing_whitespace(self):
         metadata = Metadata()
         metadata['artist'] = 'The Artist'
         filename = script_to_filename(' %artist% ', metadata)

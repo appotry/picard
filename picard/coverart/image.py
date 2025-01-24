@@ -4,14 +4,15 @@
 #
 # Copyright (C) 2007 Oliver Charles
 # Copyright (C) 2007, 2010-2011 Lukáš Lalinský
-# Copyright (C) 2007-2011, 2014, 2018-2021 Philipp Wolfer
+# Copyright (C) 2007-2011, 2014, 2018-2024 Philipp Wolfer
 # Copyright (C) 2011 Michael Wiencek
 # Copyright (C) 2011-2012, 2015 Wieland Hoffmann
-# Copyright (C) 2013-2015, 2018-2021 Laurent Monin
+# Copyright (C) 2013-2015, 2018-2024 Laurent Monin
 # Copyright (C) 2016 Ville Skyttä
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2017 Antonio Larrosa
 # Copyright (C) 2018 Vishal Choudhary
+# Copyright (C) 2024 Giorgio Fontanive
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -28,25 +29,29 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from hashlib import md5
+from hashlib import blake2b
 import os
 import shutil
 import tempfile
 
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
+    QCoreApplication,
     QMutex,
-    QObject,
     QUrl,
-    QUrlQuery,
 )
 
 from picard import log
 from picard.config import get_config
-from picard.const import DEFAULT_COVER_IMAGE_FILENAME
+from picard.const.defaults import DEFAULT_COVER_IMAGE_FILENAME
+from picard.const.sys import (
+    IS_MACOS,
+    IS_WIN,
+)
 from picard.coverart.utils import (
+    TYPES_SEPARATOR,
     Id3ImageType,
     image_type_as_id3_num,
-    translate_caa_type,
+    translated_types_as_string,
 )
 from picard.metadata import Metadata
 from picard.util import (
@@ -54,12 +59,18 @@ from picard.util import (
     encode_filename,
     imageinfo,
     is_absolute_path,
+    periodictouch,
+    sanitize_filename,
+)
+from picard.util.filenaming import (
+    make_save_path,
+    make_short_filename,
 )
 from picard.util.scripttofilename import script_to_filename
 
 
 _datafiles = dict()
-_datafile_mutex = QMutex(QMutex.Recursive)
+_datafile_mutex = QMutex()
 
 
 class DataHash:
@@ -68,46 +79,55 @@ class DataHash:
         self._filename = None
         _datafile_mutex.lock()
         try:
-            m = md5()  # nosec
-            m.update(data)
-            self._hash = m.hexdigest()
+            self._hash = blake2b(data).hexdigest()
             if self._hash not in _datafiles:
-                (fd, self._filename) = tempfile.mkstemp(prefix=prefix, suffix=suffix)
-                QObject.tagger.register_cleanup(self.delete_file)
-                with os.fdopen(fd, "wb") as imagefile:
+                # store tmp file path in  _datafiles[self._hash] ASAP
+                (fd, _datafiles[self._hash]) = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+                filepath = _datafiles[self._hash]
+                tagger = QCoreApplication.instance()
+                tagger.register_cleanup(self.delete_file)
+                periodictouch.register_file(filepath)
+                with os.fdopen(fd, 'wb') as imagefile:
                     imagefile.write(data)
-                _datafiles[self._hash] = self._filename
-                log.debug("Saving image data %s to %r" % (self._hash, self._filename))
-            else:
-                self._filename = _datafiles[self._hash]
+                log.debug("Saving image data %s to %r", self._hash[:16], filepath)
+            self._filename = _datafiles[self._hash]
         finally:
             _datafile_mutex.unlock()
 
     def __eq__(self, other):
         return self._hash == other._hash
 
+    def __lt__(self, other):
+        return self._hash < other._hash
+
     def hash(self):
         return self._hash
 
     def delete_file(self):
-        if self._filename:
+        if not self._hash or self._hash not in _datafiles:
+            return
+
+        _datafile_mutex.lock()
+        try:
+            filepath = _datafiles[self._hash]
             try:
-                os.unlink(self._filename)
-            except BaseException:
-                pass
-            else:
-                _datafile_mutex.lock()
-                try:
-                    self._filename = None
-                    del _datafiles[self._hash]
-                    self._hash = None
-                finally:
-                    _datafile_mutex.unlock()
+                os.unlink(filepath)
+                periodictouch.unregister_file(filepath)
+            except BaseException as e:
+                log.debug("Failed to delete file %r: %s",  filepath, e)
+
+            del _datafiles[self._hash]
+        except KeyError:
+            log.error("Hash %s not found in cache for file: %r", self._hash[:16], self._filename)
+        finally:
+            self._hash = None
+            self._filename = None
+            _datafile_mutex.unlock()
 
     @property
     def data(self):
         if self._filename:
-            with open(self._filename, "rb") as imagefile:
+            with open(self._filename, 'rb') as imagefile:
                 return imagefile.read()
         return None
 
@@ -139,7 +159,7 @@ class CoverArtImage:
     # `is_front` has to be explicitly set, it is used to handle CAA is_front
     # indicator
     is_front = None
-    sourceprefix = "URL"
+    sourceprefix = 'URL'
 
     def __init__(self, url=None, types=None, comment='', data=None, support_types=None,
                  support_multi_types=None, id3_type=None):
@@ -148,34 +168,33 @@ class CoverArtImage:
         else:
             self.types = types
         if url is not None:
-            self.parse_url(url)
+            if not isinstance(url, QUrl):
+                self.url = QUrl(url)
+            else:
+                self.url = url
         else:
             self.url = None
         self.comment = comment
         self.datahash = None
         # thumbnail is used to link to another CoverArtImage, ie. for PDFs
         self.thumbnail = None
+        self.external_file_coverart = None
         self.can_be_saved_to_tags = True
         self.can_be_saved_to_disk = True
         self.can_be_saved_to_metadata = True
-        self.id3_type = id3_type
+        self.can_be_filtered = True
+        self.can_be_processed = True
         if support_types is not None:
             self.support_types = support_types
         if support_multi_types is not None:
             self.support_multi_types = support_multi_types
         if data is not None:
-            self.set_data(data)
-
-    def parse_url(self, url):
-        self.url = QUrl(url)
-        self.host = self.url.host()
-        self.port = self.url.port(443 if self.url.scheme() == 'https' else 80)
-        self.path = self.url.path(QUrl.FullyEncoded)
-        if self.url.hasQuery():
-            query = QUrlQuery(self.url.query())
-            self.queryargs = dict(query.queryItems())
-        else:
-            self.queryargs = None
+            self.set_tags_data(data)
+        try:
+            self.id3_type = id3_type
+        except ValueError:
+            log.warning("Invalid ID3 image type %r in %r", type, self)
+            self.id3_type = Id3ImageType.OTHER
 
     @property
     def source(self):
@@ -211,29 +230,40 @@ class CoverArtImage:
                                                                 self.datalength,
                                                                 self.tempfile_filename)
 
-    def __repr__(self):
-        p = []
+    def dimensions_as_string(self):
+        if self.datahash is None:
+            return ""
+        return f"{self.width}x{self.height}"
+
+    def _repr(self):
         if self.url is not None:
-            p.append("url=%r" % self.url.toString())
+            yield "url=%r" % self.url.toString()
         if self.types:
-            p.append("types=%r" % self.types)
-        p.append('support_types=%r' % self.support_types)
-        p.append('support_multi_types=%r' % self.support_types)
+            yield "types=%r" % self.types
+        yield 'support_types=%r' % self.support_types
+        yield 'support_multi_types=%r' % self.support_multi_types
         if self.is_front is not None:
-            p.append("is_front=%r" % self.is_front)
+            yield "is_front=%r" % self.is_front
         if self.comment:
-            p.append("comment=%r" % self.comment)
-        return "%s(%s)" % (self.__class__.__name__, ", ".join(p))
+            yield "comment=%r" % self.comment
+
+    def __repr__(self):
+        return "%s(%s)" % (self.__class__.__name__, ", ".join(self._repr()))
+
+    def _str(self):
+        if self.url is not None:
+            yield "from %s" % self.url.toString()
+        if self.types:
+            yield "of type %s" % ','.join(self.types)
+        if self.comment:
+            yield "and comment '%s'" % self.comment
 
     def __str__(self):
-        p = ['Image']
-        if self.url is not None:
-            p.append("from %s" % self.url.toString())
-        if self.types:
-            p.append("of type %s" % ','.join(self.types))
-        if self.comment:
-            p.append("and comment '%s'" % self.comment)
-        return ' '.join(p)
+        output = self.__class__.__name__
+        s = tuple(self._str())
+        if s:
+            output += ' ' + ' '.join(s)
+        return output
 
     def __eq__(self, other):
         if self and other:
@@ -246,12 +276,36 @@ class CoverArtImage:
                 return self.datahash == other.datahash
         return not self and not other
 
+    def __lt__(self, other):
+        """Try to provide constant ordering"""
+        stypes = self.normalized_types()
+        otypes = other.normalized_types()
+        if stypes != otypes:
+            sfront = self.is_front_image()
+            ofront = other.is_front_image()
+            if sfront != ofront:
+                # front image first
+                ret = sfront
+            else:
+                # lower number of types first
+                # '-' == unknown type always last
+                ret = stypes < otypes or '-' in otypes
+        elif self.comment != other.comment:
+            # shortest comment first, alphabetical
+            scomment = self.comment or ''
+            ocomment = other.comment or ''
+            ret = scomment < ocomment
+        else:
+            # arbitrary order based on data, but should be constant
+            ret = self.datahash < other.datahash
+        return ret
+
     def __hash__(self):
         if self.datahash is None:
             return 0
         return hash(self.datahash.hash())
 
-    def set_data(self, data):
+    def set_tags_data(self, data):
         """Store image data in a file, if data already exists in such file
            it will be re-used and no file write occurs
         """
@@ -260,8 +314,11 @@ class CoverArtImage:
             self.datahash = None
 
         try:
-            (self.width, self.height, self.mimetype, self.extension,
-             self.datalength) = imageinfo.identify(data)
+            info = imageinfo.identify(data)
+            self.width, self.height = info.width, info.height
+            self.mimetype = info.mime
+            self.extension = info.extension
+            self.datalength = info.datalen
         except imageinfo.IdentificationError as e:
             raise CoverArtImageIdentificationError(e)
 
@@ -269,6 +326,9 @@ class CoverArtImage:
             self.datahash = DataHash(data, suffix=self.extension)
         except OSError as e:
             raise CoverArtImageIOError(e)
+
+    def set_external_file_data(self, data):
+        self.external_file_coverart = CoverArtImage(data=data, url=self.url)
 
     @property
     def maintype(self):
@@ -300,20 +360,30 @@ class CoverArtImage:
             type = Id3ImageType(type)
         self._id3_type = type
 
-    def _make_image_filename(self, filename, dirname, _metadata):
+    def _make_image_filename(self, filename, dirname, _metadata, win_compat, win_shorten_path):
         metadata = Metadata()
         metadata.copy(_metadata)
-        metadata["coverart_maintype"] = self.maintype
-        metadata["coverart_comment"] = self.comment
+        metadata['coverart_maintype'] = self.maintype
+        metadata['coverart_comment'] = self.comment
         if self.is_front:
-            metadata.add_unique("coverart_types", "front")
+            metadata.add_unique('coverart_types', 'front')
         for cover_type in self.types:
-            metadata.add_unique("coverart_types", cover_type)
+            metadata.add_unique('coverart_types', cover_type)
         filename = script_to_filename(filename, metadata)
         if not filename:
             filename = DEFAULT_COVER_IMAGE_FILENAME
+        dirname = os.path.normpath(dirname)
         if not is_absolute_path(filename):
-            filename = os.path.join(dirname, filename)
+            filename = os.path.normpath(os.path.join(dirname, filename))
+        try:
+            basedir = os.path.commonpath((dirname, os.path.dirname(filename)))
+            relpath = os.path.relpath(filename, start=basedir)
+        except ValueError:
+            basedir = os.path.dirname(filename)
+            relpath = os.path.basename(filename)
+        relpath = make_short_filename(basedir, relpath, win_shorten_path=win_shorten_path)
+        filename = os.path.join(basedir, relpath)
+        filename = make_save_path(filename, win_compat=win_compat, mac_compat=IS_MACOS)
         return encode_filename(filename)
 
     def save(self, dirname, metadata, counters):
@@ -324,19 +394,25 @@ class CoverArtImage:
         :counters: A dictionary mapping filenames to the amount of how many
                     images with that filename were already saved in `dirname`.
         """
+        if self.external_file_coverart is not None:
+            self.external_file_coverart.save(dirname, metadata, counters)
+            return
         if not self.can_be_saved_to_disk:
             return
         config = get_config()
-        if config.setting["image_type_as_filename"] and not self.is_front_image():
-            filename = self.maintype
+        win_compat = IS_WIN or config.setting['windows_compatibility']
+        win_shorten_path = win_compat and not config.setting['windows_long_paths']
+        if config.setting['image_type_as_filename'] and not self.is_front_image():
+            filename = sanitize_filename(self.maintype, win_compat=win_compat)
             log.debug("Make cover filename from types: %r -> %r",
                       self.types, filename)
         else:
-            filename = config.setting["cover_image_filename"]
+            filename = config.setting['cover_image_filename']
             log.debug("Using default cover image filename %r", filename)
-        filename = self._make_image_filename(filename, dirname, metadata)
+        filename = self._make_image_filename(
+            filename, dirname, metadata, win_compat, win_shorten_path)
 
-        overwrite = config.setting["save_images_overwrite"]
+        overwrite = config.setting['save_images_overwrite']
         ext = encode_filename(self.extension)
         image_filename = self._next_filename(filename, counters)
         while os.path.exists(image_filename + ext) and not overwrite:
@@ -389,19 +465,24 @@ class CoverArtImage:
         return self.datahash.filename
 
     def normalized_types(self):
-        if self.types:
-            types = sorted(set(self.types))
+        if self.types and self.support_types:
+            # ensure front type is first, if any
+            # the rest is sorted
+            types_front = ['front'] if 'front' in self.types else []
+            types_without_front = sorted(set(t for t in self.types if t != 'front'))
+            types = types_front + types_without_front
         elif self.is_front_image():
             types = ['front']
         else:
             types = ['-']
-        return types
+        return tuple(types)
 
-    def types_as_string(self, translate=True, separator=', '):
+    def types_as_string(self, translate=True, separator=TYPES_SEPARATOR):
         types = self.normalized_types()
         if translate:
-            types = [translate_caa_type(type) for type in types]
-        return separator.join(types)
+            return translated_types_as_string(types, separator)
+        else:
+            return separator.join(types)
 
 
 class CaaCoverArtImage(CoverArtImage):
@@ -410,7 +491,7 @@ class CaaCoverArtImage(CoverArtImage):
 
     support_types = True
     support_multi_types = True
-    sourceprefix = "CAA"
+    sourceprefix = 'CAA'
 
     def __init__(self, url, types=None, is_front=False, comment='', data=None):
         super().__init__(url=url, types=types, comment=comment, data=data)
@@ -428,6 +509,8 @@ class CaaThumbnailCoverArtImage(CaaCoverArtImage):
         self.can_be_saved_to_disk = False
         self.can_be_saved_to_tags = False
         self.can_be_saved_to_metadata = False
+        self.can_be_filtered = False
+        self.can_be_processed = False
 
 
 class TagCoverArtImage(CoverArtImage):
@@ -437,9 +520,9 @@ class TagCoverArtImage(CoverArtImage):
     def __init__(self, file, tag=None, types=None, is_front=None,
                  support_types=False, comment='', data=None,
                  support_multi_types=False, id3_type=None):
-        super().__init__(url=None, types=types, comment=comment, data=data, id3_type=id3_type)
         self.sourcefile = file
         self.tag = tag
+        super().__init__(url=None, types=types, comment=comment, data=data, id3_type=id3_type)
         self.support_types = support_types
         self.support_multi_types = support_multi_types
         if is_front is not None:
@@ -452,19 +535,15 @@ class TagCoverArtImage(CoverArtImage):
         else:
             return 'File %s' % (self.sourcefile)
 
-    def __repr__(self):
-        p = []
-        p.append('%r' % self.sourcefile)
+    def _repr(self):
+        yield '%r' % self.sourcefile
         if self.tag is not None:
-            p.append("tag=%r" % self.tag)
-        if self.types:
-            p.append("types=%r" % self.types)
-        if self.is_front is not None:
-            p.append("is_front=%r" % self.is_front)
-        p.append('support_types=%r' % self.support_types)
-        if self.comment:
-            p.append("comment=%r" % self.comment)
-        return "%s(%s)" % (self.__class__.__name__, ", ".join(p))
+            yield 'tag=%r' % self.tag
+        yield from super()._repr()
+
+    def _str(self):
+        yield 'from %r' % self.sourcefile
+        yield from super()._str()
 
 
 class LocalFileCoverArtImage(CoverArtImage):
