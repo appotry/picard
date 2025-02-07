@@ -2,8 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2018-2020 Philipp Wolfer
-# Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2018-2020, 2022 Philipp Wolfer
+# Copyright (C) 2020-2022 Laurent Monin
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -19,6 +20,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
+
+from mutagen import version as mutagen_version
 
 from picard import config
 from picard.formats import WAVFile
@@ -40,6 +43,7 @@ expected_info = {
     '~channels': '2',
     '~sample_rate': '44100',
     '~bits_per_sample': '16',
+    '~filesize': '14652',
 }
 
 if WAVFile.supports_tag('artist'):
@@ -66,11 +70,15 @@ if WAVFile.supports_tag('artist'):
 
     class WAVTest(CommonId3Tests.Id3TestCase):
         testfile = 'test.wav'
-        expected_info = {**expected_info, **{
-            '~bitrate': '352.8',
-        }}
+        expected_info = expected_info
         unexpected_info = ['~video']
         supports_ratings = True
+
+        def setUp(self):
+            super().setUp()
+            # mutagen < 1.46 has broken bitrate calculation for WAVE files
+            if mutagen_version >= (1, 46, 0):
+                self.expected_info['~bitrate'] = '1411.2'
 
         @skipUnlessTestfile
         def test_invalid_track_and_discnumber(self):

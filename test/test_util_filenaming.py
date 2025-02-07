@@ -5,8 +5,9 @@
 # Copyright (C) 2013-2014 Ionuț Ciocîrlan
 # Copyright (C) 2016 Sambhav Kothari
 # Copyright (C) 2018 Wieland Hoffmann
-# Copyright (C) 2018-2020 Laurent Monin
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2018-2022 Laurent Monin
+# Copyright (C) 2019-2022 Philipp Wolfer
+# Copyright (C) 2022 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -39,6 +40,7 @@ from picard.const.sys import (
     IS_WIN,
 )
 from picard.util.filenaming import (
+    ShortenMode,
     WinPathTooLong,
     get_available_filename,
     make_save_path,
@@ -46,6 +48,7 @@ from picard.util.filenaming import (
     move_ensure_casing,
     replace_extension,
     samefile_different_casing,
+    shorten_path,
 )
 
 
@@ -85,7 +88,7 @@ class ShortFilenameTest(PicardTestCase):
     def test_nonbmp_unicode_on_windows(self):
         char = "\N{MUSICAL SYMBOL G CLEF}"
         remaining = 259 - (3 + 10 + 1 + 200 + 1)
-        fn = make_short_filename(self.root, os.path.join(*[char * 100] * 2))
+        fn = make_short_filename(self.root, os.path.join(*[char * 100] * 2), win_shorten_path=True)
         self.assertEqual(fn, os.path.join(char * 100, char * (remaining // 2)))
 
     @unittest.skipUnless(IS_MACOS, "macOS test")
@@ -109,11 +112,11 @@ class ShortFilenameTest(PicardTestCase):
         max_len = self.max_len
         remaining = 259 - (3 + 10 + 1 + 200 + 1)
         divisor = len(char.encode(sys.getfilesystemencoding()))
-        fn = make_short_filename(self.root, os.path.join(*[char * 100] * 2), win_compat=True)
+        fn = make_short_filename(self.root, os.path.join(*[char * 100] * 2), win_shorten_path=True)
         self.assertEqual(fn, os.path.join(char * (max_len // divisor), char * (remaining // 2)))
 
     def test_windows_shortening(self):
-        fn = make_short_filename(self.root, os.path.join("a" * 200, "b" * 200, "c" * 200 + ".ext"), win_compat=True)
+        fn = make_short_filename(self.root, os.path.join("a" * 200, "b" * 200, "c" * 200 + ".ext"), win_shorten_path=True)
         self.assertEqual(fn, os.path.join("a" * 116, "b" * 116, "c" * 7 + ".ext"))
 
     @unittest.skipUnless(not IS_WIN, "non-windows test")
@@ -121,35 +124,50 @@ class ShortFilenameTest(PicardTestCase):
         root = os.path.join(self.root, "w" * 10, "x" * 10, "y" * 9, "z" * 9)
         fn = make_short_filename(
             root, os.path.join("b" * 200, "c" * 200, "d" * 200 + ".ext"),
-            win_compat=True, relative_to=self.root)
+            win_shorten_path=True, relative_to=self.root)
         self.assertEqual(fn, os.path.join("b" * 100, "c" * 100, "d" * 7 + ".ext"))
 
     def test_windows_node_maxlength_shortening(self):
         max_len = 226
         remaining = 259 - (3 + 10 + 1 + max_len + 1)
-        fn = make_short_filename(self.root, os.path.join("a" * 300, "b" * 100 + ".ext"), win_compat=True)
+        fn = make_short_filename(self.root, os.path.join("a" * 300, "b" * 100 + ".ext"), win_shorten_path=True)
         self.assertEqual(fn, os.path.join("a" * max_len, "b" * (remaining - 4) + ".ext"))
 
     def test_windows_selective_shortening(self):
         root = self.root + "x" * (44 - 10 - 3)
         fn = make_short_filename(root, os.path.join(
-            os.path.join(*["a" * 9] * 10 + ["b" * 15] * 10), "c" * 10), win_compat=True)
+            os.path.join(*["a" * 9] * 10 + ["b" * 15] * 10), "c" * 10), win_shorten_path=True)
         self.assertEqual(fn, os.path.join(os.path.join(*["a" * 9] * 10 + ["b" * 9] * 10), "c" * 10))
 
     def test_windows_shortening_not_needed(self):
         root = self.root + "x" * 33
         fn = make_short_filename(root, os.path.join(
-            os.path.join(*["a" * 9] * 20), "b" * 10), win_compat=True)
+            os.path.join(*["a" * 9] * 20), "b" * 10), win_shorten_path=True)
         self.assertEqual(fn, os.path.join(os.path.join(*["a" * 9] * 20), "b" * 10))
 
     def test_windows_path_too_long(self):
         root = self.root + "x" * 230
         self.assertRaises(WinPathTooLong, make_short_filename,
-                          root, os.path.join("a", "b", "c", "d"), win_compat=True)
+                          root, os.path.join("a", "b", "c", "d"), win_shorten_path=True)
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    def test_windows_long_path_allowed(self):
+        char = "Ä"
+        path = os.path.join(*[char * self.max_len] * 3)
+        fn = make_short_filename(self.root, path, win_shorten_path=False)
+        self.assertEqual(fn, path)
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    def test_windows_long_path_node_limit(self):
+        char = "Ä"
+        path = os.path.join(*[char * (self.max_len + 1)] * 3)
+        fn = make_short_filename(self.root, path, win_shorten_path=False)
+        expected_path = os.path.join(*[char * self.max_len] * 3)
+        self.assertEqual(fn, expected_path)
 
     def test_windows_path_not_too_long(self):
         root = self.root + "x" * 230
-        fn = make_short_filename(root, os.path.join("a", "b", "c"), win_compat=True)
+        fn = make_short_filename(root, os.path.join("a", "b", "c"), win_shorten_path=True)
         self.assertEqual(fn, os.path.join("a", "b", "c"))
 
     def test_whitespace(self):
@@ -201,6 +219,10 @@ class MakeSavePathTest(PicardTestCase):
     def test_decompose_precomposed_chars(self):
         path = 'foo/\u00E9bar'  # é
         self.assertEqual('foo/\u0065\u0301bar', make_save_path(path, mac_compat=True))
+
+    def test_remove_zero_length_space(self):
+        path = 'foo/\u200Bbar'
+        self.assertEqual('foo/bar', make_save_path(path))
 
 
 class GetAvailableFilenameTest(PicardTestCase):
@@ -254,3 +276,14 @@ class ReplaceExtensionTest(PicardTestCase):
         self.assertEqual('foo/bar.wvc', replace_extension('foo/bar.wv', '.wvc'))
         self.assertEqual('foo/bar.wvc', replace_extension('foo/bar.wv', 'wvc'))
         self.assertEqual('foo/bar.wvc', replace_extension('foo/bar', 'wvc'))
+
+
+class ShortenPathTest(PicardTestCase):
+
+    def test_shorten_path(self):
+        self.assertEqual(
+            os.path.join('aaaaa', 'bbbbb', 'c.mp3'),
+            shorten_path(os.path.join('a' * 6, 'b' * 6, 'cccccc.mp3'), 5, ShortenMode.BYTES))
+        self.assertEqual(
+            os.path.join('ä' * 255, 'ö' * 255, 'ü' * 251 + '.ext'),
+            shorten_path(os.path.join('ä' * 256, 'ö' * 256, 'ü' * 256 + '.ext'), 255, ShortenMode.UTF16))

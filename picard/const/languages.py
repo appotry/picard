@@ -3,10 +3,10 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2007 Lukáš Lalinský
-# Copyright (C) 2014, 2018, 2020 Laurent Monin
+# Copyright (C) 2014, 2018, 2020, 2024 Laurent Monin
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2018 Shen-Ta Hsieh
-# Copyright (C) 2018-2020 Philipp Wolfer
+# Copyright (C) 2018-2020, 2023 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -23,6 +23,9 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
+from picard.i18n import N_
+
+
 # List of available user interface languages
 UI_LANGUAGES = [
     # ('af', 'Afrikaans', N_('Afrikaans')),
@@ -34,12 +37,12 @@ UI_LANGUAGES = [
     # ('cy', 'Cymraeg', N_('Welsh')),
     ('da', 'Dansk', N_('Danish')),
     ('de', 'Deutsch', N_('German')),
-    ('de_CH', 'Deutsch (Schweiz)', N_('German (Switzerland)')),
+    # ('de_CH', 'Deutsch (Schweiz)', N_('German (Switzerland)')),
     ('el', 'ελληνικά', N_('Greek')),
     ('en', 'English', N_('English')),
     ('en_AU', 'English (Australia)', N_('English (Australia)')),
     ('en_CA', 'English (Canada)', N_('English (Canada)')),
-    ('en_GB', 'English (UK)', N_('English (UK)')),
+    ('en_GB', 'English (United Kingdom)', N_('English (United Kingdom)')),
     # ('eo', 'Esperanto', N_('Esperanto')),
     ('es', 'Español', N_('Spanish')),
     ('et', 'Eesti', N_('Estonian')),
@@ -47,7 +50,7 @@ UI_LANGUAGES = [
     ('fi', 'Suomi', N_('Finnish')),
     # ('fo', 'Føroyskt', N_('Faroese')),
     ('fr', 'Français', N_('French')),
-    ('fr_CA', 'Français canadien', N_('French (Canada)')),
+    ('fr_CA', 'Français (Canada)', N_('French (Canada)')),
     # ('fy', 'Frysk', N_('Frisian')),
     ('gl', 'Galego', N_('Galician')),
     ('he', 'עברית', N_('Hebrew')),
@@ -59,7 +62,7 @@ UI_LANGUAGES = [
     ('ja', '日本語', N_('Japanese')),
     # ('kn', 'ಕನ್ನಡ', N_('Kannada')),
     ('ko', '한국어', N_('Korean')),
-    # ('lt', 'Lietuvių', N_('Lithuanian')),
+    ('lt', 'Lietuvių', N_('Lithuanian')),
     ('ms_MY', 'Bahasa Melayu (Malaysia)', N_('Malay (Malaysia)')),
     ('nb', 'Norsk bokmål', N_('Norwegian Bokmål')),
     # ('nds', 'Plattdüütsch', N_('Low German')),
@@ -67,7 +70,7 @@ UI_LANGUAGES = [
     ('oc', 'Occitan', N_('Occitan')),
     ('pl', 'Polski', N_('Polish')),
     ('pt', 'Português', N_('Portuguese')),
-    ('pt_BR', 'Português do Brasil', N_('Brazilian Portuguese')),
+    ('pt_BR', 'Português (Brasil)', N_('Portuguese (Brazil)')),
     ('ro', 'Română', N_('Romanian')),
     ('ru', 'Pyccĸий', N_('Russian')),
     # ('sco', 'Scots leid', N_('Scots')),
@@ -78,7 +81,7 @@ UI_LANGUAGES = [
     ('sv', 'Svenska', N_('Swedish')),
     # ('ta', 'தமிழ்', N_('Tamil')),
     ('tr', 'Türkçe', N_('Turkish')),
-    ('uk', 'Украї́нська мо́ва', N_('Ukrainian')),
+    ('uk', 'Украї́нська', N_('Ukrainian')),
     ('zh_CN', '中文（中国大陆）', N_('Chinese (China)')),
     ('zh_TW', '中文（台灣）', N_('Chinese (Taiwan)')),
 ]

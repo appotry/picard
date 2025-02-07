@@ -3,8 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2018 Wieland Hoffmann
-# Copyright (C) 2019-2021 Philipp Wolfer
-# Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2019-2024 Philipp Wolfer
+# Copyright (C) 2020-2024 Laurent Monin
 # Copyright (C) 2021 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
@@ -23,6 +23,7 @@
 
 
 import json
+import logging
 import os
 import shutil
 import struct
@@ -31,15 +32,25 @@ from tempfile import (
     mkstemp,
 )
 import unittest
-from unittest.mock import Mock
+from unittest.mock import (
+    MagicMock,
+    Mock,
+)
 
-from PyQt5 import QtCore
+from PyQt6 import QtCore
 
 from picard import (
     config,
     log,
 )
+from picard.i18n import setup_gettext
 from picard.releasegroup import ReleaseGroup
+
+
+class FakeThreadPool(QtCore.QObject):
+
+    def start(self, runnable, priority):
+        runnable.run()
 
 
 class FakeTagger(QtCore.QObject):
@@ -47,13 +58,15 @@ class FakeTagger(QtCore.QObject):
     tagger_stats_changed = QtCore.pyqtSignal()
 
     def __init__(self):
-        QtCore.QObject.__init__(self)
-        QtCore.QObject.config = config
-        QtCore.QObject.log = log
+        super().__init__()
         self.tagger_stats_changed.connect(self.emit)
         self.exit_cleanup = []
         self.files = {}
         self.stopping = False
+        self.thread_pool = FakeThreadPool()
+        self.priority_thread_pool = FakeThreadPool()
+        self.window = MagicMock()
+        self.webservice = MagicMock()
 
     def register_cleanup(self, func):
         self.exit_cleanup.append(func)
@@ -70,9 +83,13 @@ class FakeTagger(QtCore.QObject):
 
 
 class PicardTestCase(unittest.TestCase):
+
     def setUp(self):
+        super().setUp()
+        log.set_level(logging.DEBUG)
+        setup_gettext(None, 'C')
         self.tagger = FakeTagger()
-        QtCore.QObject.tagger = self.tagger
+        QtCore.QCoreApplication.instance = lambda: self.tagger
         self.addCleanup(self.tagger.run_cleanup)
         self.init_config()
 

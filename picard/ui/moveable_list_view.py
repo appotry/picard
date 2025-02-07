@@ -3,7 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2018 Sambhav Kothari
-# Copyright (C) 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2018, 2020-2024 Laurent Monin
+# Copyright (C) 2022 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,7 +23,7 @@
 
 from functools import partial
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtWidgets,
 )
@@ -38,8 +39,8 @@ class MoveableListView:
         self.up_button.clicked.connect(partial(self.move_item, 1))
         self.down_button.clicked.connect(partial(self.move_item, -1))
         self.list_widget.currentRowChanged.connect(self.update_buttons)
-        self.list_widget.setDragDropMode(QtWidgets.QAbstractItemView.DragDrop)
-        self.list_widget.setDefaultDropAction(QtCore.Qt.MoveAction)
+        self.list_widget.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.DragDrop)
+        self.list_widget.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
 
     def move_item(self, offset):
         current_index = self.list_widget.currentRow()

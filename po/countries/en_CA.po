@@ -1,14 +1,14 @@
 # 
 # Translators:
-# kepstin <calvin.walton@kepstin.ca>, 2012
+# Calvin Walton <calvin.walton@kepstin.ca>, 2012
 # Luke Hollins <luke@farcry.ca>, 2015
 # Philipp Wolfer <ph.wolfer@gmail.com>, 2020
 msgid ""
 msgstr ""
 "Project-Id-Version: MusicBrainz\n"
-"PO-Revision-Date: 2020-06-26 10:03+0000\n"
-"Last-Translator: Philipp Wolfer <ph.wolfer@gmail.com>\n"
-"Language-Team: English (Canada) (http://www.transifex.com/musicbrainz/musicbrainz/language/en_CA/)\n"
+"PO-Revision-Date: 2012-05-24 19:20+0000\n"
+"Last-Translator: Philipp Wolfer <ph.wolfer@gmail.com>, 2020\n"
+"Language-Team: English (Canada) (http://app.transifex.com/musicbrainz/musicbrainz/language/en_CA/)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"

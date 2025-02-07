@@ -3,9 +3,9 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006-2014 Lukáš Lalinský
-# Copyright (C) 2014-2015, 2017-2018, 2020-2021 Laurent Monin
+# Copyright (C) 2014-2015, 2017-2018, 2020-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2016 Sambhav Kothari
-# Copyright (C) 2018-2019 Philipp Wolfer
+# Copyright (C) 2018-2019, 2021-2023 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,38 +27,47 @@ from platform import python_version
 
 from mutagen import version_string as mutagen_version
 
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     PYQT_VERSION_STR as pyqt_version,
     qVersion,
 )
-from PyQt5.QtNetwork import QSslSocket
+from PyQt6.QtNetwork import QSslSocket
 
 from picard import PICARD_FANCY_VERSION_STR
 from picard.disc import discid_version
+from picard.i18n import (
+    N_,
+    gettext as _,
+)
 from picard.util.astrcmp import astrcmp_implementation
 
 
-_versions = OrderedDict([
-    ("version", PICARD_FANCY_VERSION_STR),
-    ("python-version", python_version()),
-    ("pyqt-version", pyqt_version),
-    ("qt-version", qVersion()),
-    ("mutagen-version", mutagen_version),
-    ("discid-version", discid_version),
-    ("astrcmp", astrcmp_implementation),
-    ("ssl-version", QSslSocket.sslLibraryVersionString())
-])
+_versions = None
 
 _names = {
-    "version": "Picard",
-    "python-version": "Python",
-    "pyqt-version": "PyQt",
-    "qt-version": "Qt",
-    "mutagen-version": "Mutagen",
-    "discid-version": "Discid",
-    "astrcmp": "astrcmp",
-    "ssl-version": "SSL",
+    'version': "Picard",
+    'python-version': "Python",
+    'pyqt-version': "PyQt",
+    'qt-version': "Qt",
+    'mutagen-version': "Mutagen",
+    'discid-version': "Discid",
+    'astrcmp': "astrcmp",
+    'ssl-version': "SSL",
 }
+
+
+def _load_versions():
+    global _versions
+    _versions = OrderedDict((
+        ('version', PICARD_FANCY_VERSION_STR),
+        ('python-version', python_version()),
+        ('pyqt-version', pyqt_version),
+        ('qt-version', qVersion()),
+        ('mutagen-version', mutagen_version),
+        ('discid-version', discid_version),
+        ('astrcmp', astrcmp_implementation),
+        ('ssl-version', QSslSocket.sslLibraryVersionString())
+    ))
 
 
 def _value_as_text(value, i18n=False):
@@ -74,6 +83,8 @@ def version_name(key):
 
 
 def as_dict(i18n=False):
+    if not _versions:
+        _load_versions()
     return OrderedDict((key, _value_as_text(value, i18n))
                         for key, value in _versions.items())
 

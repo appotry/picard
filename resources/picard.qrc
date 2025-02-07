@@ -1,9 +1,5 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource>
-    <file>images/16x16/acousticbrainz-submit.png</file>
-    <file>images/16x16/acousticbrainz-submit@2x.png</file>
-    <file>images/16x16/acousticbrainz.png</file>
-    <file>images/16x16/acousticbrainz@2x.png</file>
     <file>images/16x16/acoustid-fingerprinter.png</file>
     <file>images/16x16/acoustid-fingerprinter@2x.png</file>
     <file>images/16x16/action-go-down-16.png</file>
@@ -26,6 +22,10 @@
     <file>images/16x16/edit-cut@2x.png</file>
     <file>images/16x16/edit-paste.png</file>
     <file>images/16x16/edit-paste@2x.png</file>
+    <file>images/16x16/error-no-access.png</file>
+    <file>images/16x16/error-no-access@2x.png</file>
+    <file>images/16x16/error-not-found.png</file>
+    <file>images/16x16/error-not-found@2x.png</file>
     <file>images/16x16/fingerprint-gray.png</file>
     <file>images/16x16/fingerprint-gray@2x.png</file>
     <file>images/16x16/fingerprint.png</file>
@@ -77,6 +77,26 @@
     <file>images/16x16/play-music@2x.png</file>
     <file>images/16x16/play.png</file>
     <file>images/16x16/play@2x.png</file>
+    <file>images/16x16/plugin-disabled-dark.png</file>
+    <file>images/16x16/plugin-disabled-dark@2x.png</file>
+    <file>images/16x16/plugin-disabled.png</file>
+    <file>images/16x16/plugin-disabled@2x.png</file>
+    <file>images/16x16/plugin-download-dark.png</file>
+    <file>images/16x16/plugin-download-dark@2x.png</file>
+    <file>images/16x16/plugin-download.png</file>
+    <file>images/16x16/plugin-download@2x.png</file>
+    <file>images/16x16/plugin-enabled-dark.png</file>
+    <file>images/16x16/plugin-enabled-dark@2x.png</file>
+    <file>images/16x16/plugin-enabled.png</file>
+    <file>images/16x16/plugin-enabled@2x.png</file>
+    <file>images/16x16/plugin-uninstall-dark.png</file>
+    <file>images/16x16/plugin-uninstall-dark@2x.png</file>
+    <file>images/16x16/plugin-uninstall.png</file>
+    <file>images/16x16/plugin-uninstall@2x.png</file>
+    <file>images/16x16/plugin-update-dark.png</file>
+    <file>images/16x16/plugin-update-dark@2x.png</file>
+    <file>images/16x16/plugin-update.png</file>
+    <file>images/16x16/plugin-update@2x.png</file>
     <file>images/16x16/preferences-desktop.png</file>
     <file>images/16x16/preferences-desktop@2x.png</file>
     <file>images/16x16/remove-item.png</file>
@@ -89,20 +109,24 @@
     <file>images/16x16/speaker-66@2x.png</file>
     <file>images/16x16/speaker-100.png</file>
     <file>images/16x16/speaker-100@2x.png</file>
+    <file>images/16x16/system-search.png</file>
+    <file>images/16x16/system-search@2x.png</file>
     <file>images/16x16/view-refresh.png</file>
     <file>images/16x16/view-refresh@2x.png</file>
-    <file>images/22x22/acousticbrainz-submit.png</file>
-    <file>images/22x22/acousticbrainz-submit@2x.png</file>
-    <file>images/22x22/acousticbrainz.png</file>
-    <file>images/22x22/acousticbrainz@2x.png</file>
     <file>images/22x22/acoustid-fingerprinter.png</file>
     <file>images/22x22/acoustid-fingerprinter@2x.png</file>
+    <file>images/22x22/dialog-error.png</file>
+    <file>images/22x22/dialog-error@2x.png</file>
     <file>images/22x22/document-open.png</file>
     <file>images/22x22/document-open@2x.png</file>
     <file>images/22x22/document-save.png</file>
     <file>images/22x22/document-save@2x.png</file>
     <file>images/22x22/edit-clear.png</file>
     <file>images/22x22/edit-clear@2x.png</file>
+    <file>images/22x22/error-no-access.png</file>
+    <file>images/22x22/error-no-access@2x.png</file>
+    <file>images/22x22/error-not-found.png</file>
+    <file>images/22x22/error-not-found@2x.png@2x.png</file>
     <file>images/22x22/fingerprint.png</file>
     <file>images/22x22/fingerprint@2x.png</file>
     <file>images/22x22/folder.png</file>
@@ -139,6 +163,26 @@
     <file>images/22x22/play-music@2x.png</file>
     <file>images/22x22/play.png</file>
     <file>images/22x22/play@2x.png</file>
+    <file>images/22x22/plugin-disabled-dark.png</file>
+    <file>images/22x22/plugin-disabled-dark@2x.png</file>
+    <file>images/22x22/plugin-disabled.png</file>
+    <file>images/22x22/plugin-disabled@2x.png</file>
+    <file>images/22x22/plugin-download-dark.png</file>
+    <file>images/22x22/plugin-download-dark@2x.png</file>
+    <file>images/22x22/plugin-download.png</file>
+    <file>images/22x22/plugin-download@2x.png</file>
+    <file>images/22x22/plugin-enabled-dark.png</file>
+    <file>images/22x22/plugin-enabled-dark@2x.png</file>
+    <file>images/22x22/plugin-enabled.png</file>
+    <file>images/22x22/plugin-enabled@2x.png</file>
+    <file>images/22x22/plugin-uninstall-dark.png</file>
+    <file>images/22x22/plugin-uninstall-dark@2x.png</file>
+    <file>images/22x22/plugin-uninstall.png</file>
+    <file>images/22x22/plugin-uninstall@2x.png</file>
+    <file>images/22x22/plugin-update-dark.png</file>
+    <file>images/22x22/plugin-update-dark@2x.png</file>
+    <file>images/22x22/plugin-update.png</file>
+    <file>images/22x22/plugin-update@2x.png</file>
     <file>images/22x22/preferences-desktop.png</file>
     <file>images/22x22/preferences-desktop@2x.png</file>
     <file>images/22x22/speaker-0.png</file>
@@ -164,6 +208,7 @@
     <file>images/file-pending@2x.png</file>
     <file>images/file.png</file>
     <file>images/file@2x.png</file>
+    <file>images/image-missing.png</file>
     <file>images/loader.gif</file>
     <file>images/match-50.png</file>
     <file>images/match-50@2x.png</file>

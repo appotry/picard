@@ -4,9 +4,9 @@
 #
 # Copyright (C) 2004 Robert Kaye
 # Copyright (C) 2006-2007 Lukáš Lalinský
-# Copyright (C) 2008, 2019-2021 Philipp Wolfer
+# Copyright (C) 2008, 2019-2021, 2025 Philipp Wolfer
 # Copyright (C) 2012-2013 Michael Wiencek
-# Copyright (C) 2013, 2018-2021 Laurent Monin
+# Copyright (C) 2013, 2018-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2017 Sambhav Kothari
 #
 # This program is free software; you can redistribute it and/or
@@ -24,43 +24,40 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from picard.config import (
-    TextOption,
-    get_config,
-)
+from picard.config import get_config
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import N_
 from picard.util.cdrom import (
     AUTO_DETECT_DRIVES,
-    DEFAULT_DRIVES,
     get_cdrom_drives,
 )
 
-from picard.ui.options import (
-    OptionsPage,
-    register_options_page,
-)
+from picard.ui.options import OptionsPage
 
 
 if AUTO_DETECT_DRIVES:
-    from picard.ui.ui_options_cdlookup_select import Ui_CDLookupOptionsPage
+    from picard.ui.forms.ui_options_cdlookup_select import (
+        Ui_CDLookupOptionsPage,
+    )
 else:
-    from picard.ui.ui_options_cdlookup import Ui_CDLookupOptionsPage
+    from picard.ui.forms.ui_options_cdlookup import Ui_CDLookupOptionsPage
 
 
 class CDLookupOptionsPage(OptionsPage):
 
-    NAME = "cdlookup"
+    NAME = 'cdlookup'
     TITLE = N_("CD Lookup")
     PARENT = None
     SORT_ORDER = 50
     ACTIVE = True
-    HELP_URL = '/config/options_cdlookup.html'
+    HELP_URL = "/config/options_cdlookup.html"
 
-    options = [
-        TextOption("setting", "cd_lookup_device", ",".join(DEFAULT_DRIVES)),
-    ]
+    OPTIONS = (
+        ('cd_lookup_device', None),
+    )
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = Ui_CDLookupOptionsPage()
         self.ui.setupUi(self)
         if AUTO_DETECT_DRIVES:
@@ -69,7 +66,7 @@ class CDLookupOptionsPage(OptionsPage):
 
     def load(self):
         config = get_config()
-        device = config.setting["cd_lookup_device"]
+        device = config.setting['cd_lookup_device']
         if AUTO_DETECT_DRIVES:
             try:
                 self.ui.cd_lookup_device.setCurrentIndex(self._device_list.index(device))
@@ -86,7 +83,7 @@ class CDLookupOptionsPage(OptionsPage):
         else:
             device = self.ui.cd_lookup_device.text()
             device_list = [device]
-        config.setting["cd_lookup_device"] = device
+        config.setting['cd_lookup_device'] = device
         self.tagger.window.update_cd_lookup_drives(device_list)
 
 

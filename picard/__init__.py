@@ -3,18 +3,19 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006-2008, 2011-2014 Lukáš Lalinský
-# Copyright (C) 2009, 2018-2021 Philipp Wolfer
+# Copyright (C) 2009, 2018-2024 Philipp Wolfer
 # Copyright (C) 2012 Chad Wilson
 # Copyright (C) 2012-2013 Michael Wiencek
-# Copyright (C) 2013-2021 Laurent Monin
+# Copyright (C) 2013-2024 Laurent Monin
 # Copyright (C) 2015 Ohm Patel
 # Copyright (C) 2015 Sophist-UK
 # Copyright (C) 2016 Suhas
 # Copyright (C) 2016-2017 Wieland Hoffmann
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2017 Ville Skyttä
-# Copyright (C) 2018, 2021 Bob Swift
+# Copyright (C) 2018, 2021, 2023 Bob Swift
 # Copyright (C) 2021 Gabriel Ferreira
+# Copyright (C) 2022 skelly37
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -31,10 +32,9 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from picard.version import (
-    Version,
-    VersionError,
-)
+import sys
+
+from picard.version import Version
 
 
 PICARD_ORG_NAME = "MusicBrainz"
@@ -42,7 +42,7 @@ PICARD_APP_NAME = "Picard"
 PICARD_DISPLAY_NAME = "MusicBrainz Picard"
 PICARD_APP_ID = "org.musicbrainz.Picard"
 PICARD_DESKTOP_NAME = PICARD_APP_ID + ".desktop"
-PICARD_VERSION = Version(2, 7, 0, 'beta', 3)
+PICARD_VERSION = Version(3, 0, 0, 'dev', 5)
 
 
 # optional build version
@@ -51,22 +51,8 @@ PICARD_VERSION = Version(2, 7, 0, 'beta', 3)
 PICARD_BUILD_VERSION_STR = ""
 
 
-def version_to_string(version, short=False):
-    """Deprecated: Use picard.version.Version.to_string instead"""
-    if len(version) != 5:
-        raise VersionError("Length != 5")
-    if not isinstance(version, Version):
-        version = Version(*version)
-    return version.to_string(short=short)
-
-
-def version_from_string(version_str):
-    """Deprecated: Use picard.version.Version.from_string instead"""
-    return Version.from_string(version_str)
-
-
-PICARD_VERSION_STR = PICARD_VERSION.to_string()
-PICARD_VERSION_STR_SHORT = PICARD_VERSION.to_string(short=True)
+PICARD_VERSION_STR = str(PICARD_VERSION)
+PICARD_VERSION_STR_SHORT = PICARD_VERSION.short_str()
 if PICARD_BUILD_VERSION_STR:
     __version__ = "%s+%s" % (PICARD_VERSION_STR, PICARD_BUILD_VERSION_STR)
     PICARD_FANCY_VERSION_STR = "%s (%s)" % (PICARD_VERSION_STR_SHORT,
@@ -77,27 +63,18 @@ else:
 
 # Keep those ordered
 api_versions = [
-    "2.0",
-    "2.1",
-    "2.2",
-    "2.3",
-    "2.4",
-    "2.5",
-    "2.6",
-    "2.7",
+    "3.0",
 ]
 
 api_versions_tuple = [Version.from_string(v) for v in api_versions]
 
 
-def crash_handler():
+def crash_handler(exc: Exception = None):
     """Implements minimal handling of an exception crashing the application.
     This function tries to log the exception to a log file and display
     a minimal crash dialog to the user.
     This function is supposed to be called from inside an except blog.
     """
-    import sys
-
     # Allow disabling the graphical crash handler for debugging and CI purposes.
     if set(sys.argv) & {'--no-crash-dialog', '-v', '--version', '-V', '--long-version', '-h', '--help'}:
         return
@@ -106,7 +83,14 @@ def crash_handler():
     # with minimum chance to fail.
     from tempfile import NamedTemporaryFile
     import traceback
-    trace = traceback.format_exc()
+    if exc:
+        if sys.version_info < (3, 10):
+            trace_list = traceback.format_exception(None, exc, exc.__traceback__)
+        else:
+            trace_list = traceback.format_exception(exc)  # pylint: disable=no-value-for-parameter
+        trace = "".join(trace_list)
+    else:
+        trace = traceback.format_exc()
     logfile = None
     try:
         with NamedTemporaryFile(suffix='.log', prefix='picard-crash-', delete=False) as f:
@@ -117,16 +101,23 @@ def crash_handler():
         logfile = None
 
     # Display the crash information to the user as a dialog. This requires
-    # importing Qt5 and has some potential to fail if things are broken.
-    from PyQt5.QtCore import QCoreApplication, Qt, QUrl
-    from PyQt5.QtWidgets import QApplication, QMessageBox
+    # importing Qt6 and has some potential to fail if things are broken.
+    from PyQt6.QtCore import (
+        QCoreApplication,
+        Qt,
+        QUrl,
+    )
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QMessageBox,
+    )
     app = QCoreApplication.instance()
     if not app:
         app = QApplication(sys.argv)
     msgbox = QMessageBox()
-    msgbox.setIcon(QMessageBox.Critical)
+    msgbox.setIcon(QMessageBox.Icon.Critical)
     msgbox.setWindowTitle("Picard terminated unexpectedly")
-    msgbox.setTextFormat(Qt.RichText)
+    msgbox.setTextFormat(Qt.TextFormat.RichText)
     msgbox.setText(
         'An unexpected error has caused Picard to crash. '
         'Please report this issue on the <a href="https://tickets.metabrainz.org/projects/PICARD">MusicBrainz bug tracker</a>.')
@@ -136,7 +127,16 @@ def crash_handler():
             'A logfile has been written to <a href="{0}">{1}</a>.'
             .format(logfile_url.url(), logfile))
     msgbox.setDetailedText(trace)
-    msgbox.setStandardButtons(QMessageBox.Close)
-    msgbox.setDefaultButton(QMessageBox.Close)
-    msgbox.exec_()
+    msgbox.setStandardButtons(QMessageBox.StandardButton.Close)
+    msgbox.setDefaultButton(QMessageBox.StandardButton.Close)
+    msgbox.exec()
     app.quit()
+
+
+def register_excepthook():
+    def _global_exception_handler(exctype, value, traceback):
+        from picard import crash_handler
+        crash_handler(exc=value)
+        sys.__excepthook__(exctype, value, traceback)
+
+    sys.excepthook = _global_exception_handler

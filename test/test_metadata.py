@@ -4,8 +4,8 @@
 #
 # Copyright (C) 2017 Sophist-UK
 # Copyright (C) 2018, 2020 Wieland Hoffmann
-# Copyright (C) 2018-2020 Laurent Monin
-# Copyright (C) 2018-2020 Philipp Wolfer
+# Copyright (C) 2018-2021, 2023 Philipp Wolfer
+# Copyright (C) 2018-2024 Laurent Monin
 # Copyright (C) 2020 dukeyin
 #
 # This program is free software; you can redistribute it and/or
@@ -30,9 +30,12 @@ from test.picardtestcase import (
 )
 from test.test_coverart_image import create_image
 
-from picard.cluster import Cluster
+from picard.acoustid.json_helpers import (
+    parse_recording as acoustid_parse_recording,
+)
+from picard.cluster import CLUSTER_COMPARISON_WEIGHTS
 from picard.coverart.image import CoverArtImage
-from picard.file import File
+from picard.file import FILE_COMPARISON_WEIGHTS
 from picard.mbjson import (
     release_to_metadata,
     track_to_metadata,
@@ -41,6 +44,7 @@ from picard.metadata import (
     MULTI_VALUED_JOINER,
     Metadata,
     MultiMetadataProxy,
+    trackcount_score,
     weights_from_preferred_countries,
     weights_from_preferred_formats,
     weights_from_release_type_scores,
@@ -60,7 +64,8 @@ settings = {
     'translate_artist_names': False,
     'release_ars': True,
     'release_type_scores': [
-        ('Album', 1.0)
+        ('Album', 1.0),
+        ('Other', 1.0),
     ],
 }
 
@@ -95,9 +100,6 @@ class CommonTests:
 
         @staticmethod
         def get_metadata_object():
-            pass
-
-        def tearDown(self):
             pass
 
         def test_metadata_setitem(self):
@@ -301,12 +303,17 @@ class CommonTests:
             self.assertEqual(self.metadata.keys(), metadata.deleted_tags)
 
         def test_length_score(self):
-            results = [(20000, 0, 0.333333333333),
-                       (20000, 10000, 0.666666666667),
-                       (20000, 20000, 1.0),
-                       (20000, 30000, 0.666666666667),
-                       (20000, 40000, 0.333333333333),
-                       (20000, 50000, 0.0)]
+            results = (
+                (20000, 0, 0.333333333333),
+                (20000, 10000, 0.666666666667),
+                (20000, 20000, 1.0),
+                (20000, 30000, 0.666666666667),
+                (20000, 40000, 0.333333333333),
+                (20000, 50000, 0.0),
+                (20000, None, 0.0),
+                (None, 2000, 0.0),
+                (None, None, 0.0),
+            )
             for (a, b, expected) in results:
                 actual = Metadata.length_score(a, b)
                 self.assertAlmostEqual(expected, actual,
@@ -557,9 +564,9 @@ class CommonTests:
             release = load_test_json('release.json')
             metadata = Metadata()
             release_to_metadata(release, metadata)
-            match = metadata.compare_to_release(release, Cluster.comparison_weights)
-            self.assertEqual(1.0, match.similarity)
-            self.assertEqual(release, match.release)
+            match_ = metadata.compare_to_release(release, CLUSTER_COMPARISON_WEIGHTS)
+            self.assertEqual(1.0, match_.similarity)
+            self.assertEqual(release, match_.release)
 
         def test_compare_to_release_with_score(self):
             release = load_test_json('release.json')
@@ -567,8 +574,43 @@ class CommonTests:
             release_to_metadata(release, metadata)
             for score, sim in ((42, 0.42), ('42', 0.42), ('foo', 1.0), (None, 1.0)):
                 release['score'] = score
-                match = metadata.compare_to_release(release, Cluster.comparison_weights)
-                self.assertEqual(sim, match.similarity)
+                match_ = metadata.compare_to_release(release, CLUSTER_COMPARISON_WEIGHTS)
+                self.assertEqual(sim, match_.similarity)
+
+        def test_compare_to_release_parts_totaltracks(self):
+            release = load_test_json('release_multidisc.json')
+            metadata = Metadata()
+            weights = {"totaltracks": 30}
+            release_to_metadata(release, metadata)
+            for totaltracks, sim in ((4, 1.0), (3, 1.0), (2, 0.3), (5, 0.0)):
+                metadata['totaltracks'] = totaltracks
+                parts = metadata.compare_to_release_parts(release, weights)
+                self.assertIn((sim, 30), parts)
+
+        def test_compare_to_release_parts_totalalbumtracks(self):
+            release = load_test_json('release_multidisc.json')
+            metadata = Metadata()
+            weights = {"totalalbumtracks": 30}
+            release_to_metadata(release, metadata)
+            for totaltracks, sim in ((7, 1.0), (6, 0.3), (8, 0.0)):
+                metadata['~totalalbumtracks'] = totaltracks
+                parts = metadata.compare_to_release_parts(release, weights)
+                self.assertIn((sim, 30), parts)
+
+        def test_compare_to_release_parts_totalalbumtracks_totaltracks_fallback(self):
+            release = load_test_json('release_multidisc.json')
+            metadata = Metadata()
+            weights = {"totalalbumtracks": 30}
+            release_to_metadata(release, metadata)
+            for totaltracks, sim in ((7, 1.0), (6, 0.3), (8, 0.0)):
+                metadata['totaltracks'] = totaltracks
+                parts = metadata.compare_to_release_parts(release, weights)
+                self.assertIn((sim, 30), parts)
+
+        def test_trackcount_score(self):
+            self.assertEqual(1.0, trackcount_score(5, 5))
+            self.assertEqual(0.0, trackcount_score(6, 5))
+            self.assertEqual(0.3, trackcount_score(4, 5))
 
         def test_weights_from_release_type_scores(self):
             release = load_test_json('release.json')
@@ -583,11 +625,19 @@ class CommonTests:
                 parts[1],
                 (0.5, 666)
             )
-            del release['release-group']
-            weights_from_release_type_scores(parts, release, {}, 777)
+
+        def test_weights_from_release_type_scores_no_type(self):
+            release = load_test_json('release_no_type.json')
+            parts = []
+            weights_from_release_type_scores(parts, release, {'Other': 0.75}, 123)
             self.assertEqual(
-                parts[2],
-                (0.0, 777)
+                parts[0],
+                (0.75, 123)
+            )
+            weights_from_release_type_scores(parts, release, {}, 123)
+            self.assertEqual(
+                parts[1],
+                (0.5, 123)
             )
 
         def test_preferred_countries(self):
@@ -614,9 +664,9 @@ class CommonTests:
             track_json = load_test_json('track.json')
             track = Track(track_json['id'])
             track_to_metadata(track_json, track)
-            match = track.metadata.compare_to_track(track_json, File.comparison_weights)
-            self.assertEqual(1.0, match.similarity)
-            self.assertEqual(track_json, match.track)
+            match_ = track.metadata.compare_to_track(track_json, FILE_COMPARISON_WEIGHTS)
+            self.assertEqual(1.0, match_.similarity)
+            self.assertEqual(track_json, match_.track)
 
         def test_compare_to_track_with_score(self):
             track_json = load_test_json('track.json')
@@ -624,8 +674,54 @@ class CommonTests:
             track_to_metadata(track_json, track)
             for score, sim in ((42, 0.42), ('42', 0.42), ('foo', 1.0), (None, 1.0)):
                 track_json['score'] = score
-                match = track.metadata.compare_to_track(track_json, File.comparison_weights)
-                self.assertEqual(sim, match.similarity)
+                match_ = track.metadata.compare_to_track(track_json, FILE_COMPARISON_WEIGHTS)
+                self.assertEqual(sim, match_.similarity)
+
+        def test_compare_to_track_is_video(self):
+            recording = load_test_json('recording_video_null.json')
+            m = Metadata()
+            match_ = m.compare_to_track(recording, {'isvideo': 1})
+            self.assertEqual(1.0, match_.similarity)
+            m['~video'] = '1'
+            match_ = m.compare_to_track(recording, {'isvideo': 1})
+            self.assertEqual(0.0, match_.similarity)
+            recording['video'] = True
+            match_ = m.compare_to_track(recording, {'isvideo': 1})
+            self.assertEqual(1.0, match_.similarity)
+
+        def test_compare_to_track_full(self):
+            recording = load_test_json('recording_video_null.json')
+            m = Metadata({
+                'artist': 'Tim Green',
+                'release': 'Eastbound Silhouette',
+                'date': '2022',
+                'title': 'Lune',
+                'totaltracks': '6',
+                'albumartist': 'Tim Green',
+                'tracknumber': '4',
+            })
+            match_ = m.compare_to_track(recording, FILE_COMPARISON_WEIGHTS)
+            self.assertGreaterEqual(match_.similarity, 0.8)
+            self.assertEqual(recording, match_.track)
+            self.assertEqual(recording['releases'][0], match_.release)
+
+        def test_compare_to_track_without_releases(self):
+            self.set_config_values({
+                'release_type_scores': [('Compilation', 0.6), ('Other', 0.6)]
+            })
+            track_json = acoustid_parse_recording(load_test_json('acoustid.json'))
+            track = Track(track_json['id'])
+            track.metadata.update({
+                'album': 'x',
+                'artist': 'Ed Sheeran',
+                'title': 'Nina',
+            })
+            track.metadata.length = 225000
+            m1 = track.metadata.compare_to_track(track_json, FILE_COMPARISON_WEIGHTS)
+            del track_json['releases']
+            m2 = track.metadata.compare_to_track(track_json, FILE_COMPARISON_WEIGHTS)
+            self.assertGreater(m1.similarity, m2.similarity,
+                               'Matching score for release with recordings must be higher then for release without')
 
 
 class MetadataTest(CommonTests.CommonMetadataTestCase):

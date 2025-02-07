@@ -2,9 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2008, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008, 2018-2022 Philipp Wolfer
 # Copyright (C) 2011, 2013 Michael Wiencek
-# Copyright (C) 2013, 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2013, 2018, 2020-2024 Laurent Monin
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2018 Vishal Choudhary
 #
@@ -23,24 +23,26 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
 
+from picard import log
 from picard.config import get_config
+from picard.i18n import N_
 
 
 class RatingWidget(QtWidgets.QWidget):
 
-    def __init__(self, parent, track):
-        super().__init__(parent)
+    def __init__(self, track, parent=None):
+        super().__init__(parent=parent)
         self._track = track
         config = get_config()
-        self._maximum = config.setting["rating_steps"] - 1
+        self._maximum = config.setting['rating_steps'] - 1
         try:
-            self._rating = int(track.metadata["~rating"] or 0)
+            self._rating = int(track.metadata['~rating'] or 0)
         except ValueError:
             self._rating = 0
         self._highlight = 0
@@ -53,7 +55,7 @@ class RatingWidget(QtWidgets.QWidget):
         self._height = self._star_size + 6
         self.setMaximumSize(self._width, self._height)
         self.setMinimumSize(self._width, self._height)
-        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed))
+        self.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed))
         self.setMouseTracking(True)
 
     def sizeHint(self):
@@ -66,8 +68,8 @@ class RatingWidget(QtWidgets.QWidget):
             self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            x = event.x()
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            x = event.pos().x()
             if x < self._offset:
                 return
             rating = self._getRatingFromPosition(x)
@@ -79,7 +81,7 @@ class RatingWidget(QtWidgets.QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event):
-        self._setHighlight(self._getRatingFromPosition(event.x()))
+        self._setHighlight(self._getRatingFromPosition(event.pos().x()))
         event.accept()
 
     def leaveEvent(self, event):
@@ -92,16 +94,28 @@ class RatingWidget(QtWidgets.QWidget):
             rating = self._maximum
         return rating
 
+    def _submitted(self, document, http, error):
+        if error:
+            self.tagger.window.set_statusbar_message(
+                N_("Failed to submit rating for track '%(track_title)s' due to server error %(error)d"),
+                {'track_title': self._track.metadata['title'], 'error': error},
+                echo=None,
+            )
+            log.error("Failed to submit rating for %s (server HTTP error %d)", self._track, error)
+
     def _update_track(self):
         track = self._track
         rating = str(self._rating)
-        track.metadata["~rating"] = rating
+        track.metadata['~rating'] = rating
         for file in track.files:
-            file.metadata["~rating"] = rating
+            file.metadata['~rating'] = rating
         config = get_config()
-        if config.setting["submit_ratings"]:
-            ratings = {("recording", track.id): self._rating}
-            self.tagger.mb_api.submit_ratings(ratings, None)
+        if config.setting['submit_ratings']:
+            ratings = {('recording', track.id): self._rating}
+            try:
+                self.tagger.mb_api.submit_ratings(ratings, self._submitted)
+            except ValueError:  # This should never happen as self._rating is always an integer
+                log.error("Failed to submit rating for recording %s", track.id, exc_info=True)
 
     def paintEvent(self, event=None):
         painter = QtGui.QPainter(self)

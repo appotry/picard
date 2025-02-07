@@ -5,8 +5,9 @@
 # Copyright (C) 2011 Lukáš Lalinský
 # Copyright (C) 2017-2018 Sambhav Kothari
 # Copyright (C) 2018 Vishal Choudhary
-# Copyright (C) 2018-2021 Laurent Monin
-# Copyright (C) 2018-2021 Philipp Wolfer
+# Copyright (C) 2018-2021, 2023-2024 Laurent Monin
+# Copyright (C) 2018-2024 Philipp Wolfer
+# Copyright (C) 2023 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,17 +28,32 @@ from collections import (
     deque,
     namedtuple,
 )
+from enum import IntEnum
 from functools import partial
 import json
 
-from PyQt5 import QtCore
+from PyQt6 import QtCore
 
 from picard import log
-from picard.acoustid.json_helpers import parse_recording
+from picard.acoustid.recordings import RecordingResolver
 from picard.config import get_config
 from picard.const import FPCALC_NAMES
+from picard.const.defaults import DEFAULT_FPCALC_THREADS
+from picard.const.sys import IS_WIN
 from picard.file import File
-from picard.util import find_executable
+from picard.i18n import N_
+from picard.util import (
+    find_executable,
+    win_prefix_longpath,
+)
+from picard.webservice.api_helpers import AcoustIdAPIHelper
+
+
+class FpcalcExit(IntEnum):
+    # fpcalc returned successfully
+    NOERROR = 0
+    # fpcalc encountered errors during decoding, but could still generate a fingerprint
+    DECODING_ERROR = 3
 
 
 def get_score(node):
@@ -65,11 +81,11 @@ AcoustIDTask = namedtuple('AcoustIDTask', ('file', 'next_func'))
 
 class AcoustIDClient(QtCore.QObject):
 
-    def __init__(self, acoustid_api):
+    def __init__(self, acoustid_api: AcoustIdAPIHelper):
         super().__init__()
+        self.tagger = QtCore.QCoreApplication.instance()
         self._queue = deque()
         self._running = 0
-        self._max_processes = 2
         self._acoustid_api = acoustid_api
 
     def init(self):
@@ -78,8 +94,11 @@ class AcoustIDClient(QtCore.QObject):
     def done(self):
         pass
 
+    def get_max_processes(self):
+        config = get_config()
+        return config.setting['fpcalc_threads'] or DEFAULT_FPCALC_THREADS
+
     def _on_lookup_finished(self, task, document, http, error):
-        doc = {}
         if error:
             mparms = {
                 'error': http.errorString(),
@@ -94,42 +113,16 @@ class AcoustIDClient(QtCore.QObject):
                 mparms,
                 echo=None
             )
+            task.next_func({}, http, error)
         else:
             try:
-                recording_list = doc['recordings'] = []
                 status = document['status']
                 if status == 'ok':
-                    results = document.get('results') or []
-                    for result in results:
-                        recordings = result.get('recordings') or []
-                        max_sources = max([r.get('sources', 1) for r in recordings] + [1])
-                        result_score = get_score(result)
-                        for recording in recordings:
-                            parsed_recording = parse_recording(recording)
-                            if parsed_recording is not None:
-                                # Calculate a score based on result score and sources for this
-                                # recording relative to other recordings in this result
-                                score = recording.get('sources', 1) / max_sources * 100
-                                parsed_recording['score'] = score * result_score
-                                parsed_recording['acoustid'] = result['id']
-                                recording_list.append(parsed_recording)
-
-                    if results:
-                        if not recording_list:
-                            # Set AcoustID in tags if there was no matching recording
-                            task.file.metadata['acoustid_id'] = results[0]['id']
-                            task.file.update()
-                            log.debug(
-                                "AcoustID: Found no matching recordings for '%s',"
-                                " setting acoustid_id tag to %r",
-                                task.file.filename, results[0]['id']
-                            )
-                        else:
-                            log.debug(
-                                "AcoustID: Lookup successful for '%s' (recordings: %d)",
-                                task.file.filename,
-                                len(recording_list)
-                            )
+                    resolver = RecordingResolver(
+                        self._acoustid_api.webservice,
+                        document,
+                        callback=partial(self._on_recording_resolve_finish, task, document, http))
+                    resolver.resolve()
                 else:
                     mparms = {
                         'error': document['error']['message'],
@@ -143,11 +136,32 @@ class AcoustIDClient(QtCore.QObject):
                         mparms,
                         echo=None
                     )
+                    task.next_func({}, http, error)
             except (AttributeError, KeyError, TypeError) as e:
                 log.error("AcoustID: Error reading response", exc_info=True)
-                error = e
+                task.next_func({}, http, e)
 
-        task.next_func(doc, http, error)
+    def _on_recording_resolve_finish(self, task, document, http, result=None, error=None):
+        recording_list = result
+        if not recording_list:
+            results = document.get('results')
+            if results:
+                # Set AcoustID in tags if there was no matching recording
+                acoustid = results[0].get('id')
+                task.file.metadata['acoustid_id'] = acoustid
+                task.file.update()
+                log.debug(
+                    "AcoustID: Found no matching recordings for '%s',"
+                    " setting acoustid_id tag to %r",
+                    task.file.filename, acoustid
+                )
+        else:
+            log.debug(
+                "AcoustID: Lookup successful for '%s' (recordings: %d)",
+                task.file.filename,
+                len(recording_list)
+            )
+        task.next_func({'recordings': recording_list}, http, error)
 
     def _lookup_fingerprint(self, task, result=None, error=None):
         if task.file.state == File.REMOVED:
@@ -173,7 +187,7 @@ class AcoustIDClient(QtCore.QObject):
             mparms
         )
         self.tagger.window.set_statusbar_message(
-            N_("Looking up the fingerprint for file '%(filename)s' ..."),
+            N_("Looking up the fingerprint for file '%(filename)s' …"),
             mparms,
             echo=None
         )
@@ -197,7 +211,12 @@ class AcoustIDClient(QtCore.QObject):
         try:
             self._running -= 1
             self._run_next_task()
-            if exit_code == 0 and exit_status == 0:
+            # fpcalc returns the exit code 3 in case of decoding errors that
+            # still allowed it to calculate a result.
+            if exit_code in {FpcalcExit.NOERROR, FpcalcExit.DECODING_ERROR} and exit_status == QtCore.QProcess.ExitStatus.NormalExit:
+                if exit_code == FpcalcExit.DECODING_ERROR:
+                    error = bytes(process.readAllStandardError()).decode()
+                    log.warning("fpcalc non-critical decoding errors for %s: %s", task.file, error)
                 output = bytes(process.readAllStandardOutput()).decode()
                 jsondata = json.loads(output)
                 # Use only integer part of duration, floats are not allowed in lookup
@@ -216,7 +235,11 @@ class AcoustIDClient(QtCore.QObject):
         finally:
             if result and result[0] == 'fingerprint':
                 fp_type, fingerprint, length = result
-                task.file.set_acoustid_fingerprint(fingerprint, length)
+                # Only set the fingerprint if it was calculated without
+                # decoding errors. Otherwise fingerprints for broken files
+                # might get submitted.
+                if exit_code == FpcalcExit.NOERROR:
+                    task.file.set_acoustid_fingerprint(fingerprint, length)
             task.next_func(result)
 
     def _on_fpcalc_error(self, task, error):
@@ -247,8 +270,13 @@ class AcoustIDClient(QtCore.QObject):
         process = QtCore.QProcess(self)
         process.setProperty('picard_finished', False)
         process.finished.connect(partial(self._on_fpcalc_finished, task))
-        process.error.connect(partial(self._on_fpcalc_error, task))
-        process.start(self._fpcalc, ["-json", "-length", "120", task.file.filename])
+        process.errorOccurred.connect(partial(self._on_fpcalc_error, task))
+        file_path = task.file.filename
+        # On Windows fpcalc.exe does not handle long paths, even if system wide
+        # long path support is enabled. Ensure the path is properly prefixed.
+        if IS_WIN:
+            file_path = win_prefix_longpath(file_path)
+        process.start(self._fpcalc, ['-json', '-length', '120', file_path])
         log.debug("Starting fingerprint calculator %r %r", self._fpcalc, task.file.filename)
 
     def analyze(self, file, next_func):
@@ -257,7 +285,7 @@ class AcoustIDClient(QtCore.QObject):
 
         config = get_config()
         fingerprint = task.file.acoustid_fingerprint
-        if not fingerprint and not config.setting["ignore_existing_acoustid_fingerprints"]:
+        if not fingerprint and not config.setting['ignore_existing_acoustid_fingerprints']:
             # use cached fingerprint from file metadata
             fingerprints = task.file.metadata.getall('acoustid_fingerprint')
             if fingerprints:
@@ -279,7 +307,7 @@ class AcoustIDClient(QtCore.QObject):
             return
         self._queue.append(task)
         self._fpcalc = get_fpcalc()
-        if self._running < self._max_processes:
+        if self._running < self.get_max_processes():
             self._run_next_task()
 
     def fingerprint(self, file, next_func):

@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2018, 2020 Philipp Wolfer
-# Copyright (C) 2020-2021 Laurent Monin
+# Copyright (C) 2018, 2020-2022, 2024 Philipp Wolfer
+# Copyright (C) 2020-2021, 2023-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -56,8 +56,6 @@ class MIDIFile(File):
     def supports_tag(cls, name):
         return False
 
+    @property
     def can_analyze(self):
-        return False
-
-    def can_extract(self):
         return False

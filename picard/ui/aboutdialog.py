@@ -3,11 +3,11 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006-2014 Lukáš Lalinský
-# Copyright (C) 2008, 2013, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008, 2013, 2018-2024 Philipp Wolfer
 # Copyright (C) 2011 Pavan Chander
 # Copyright (C) 2011, 2013 Wieland Hoffmann
 # Copyright (C) 2013 Michael Wiencek
-# Copyright (C) 2013-2015, 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2013-2015, 2018, 2020-2024 Laurent Monin
 # Copyright (C) 2014 Ismael Olea
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2021 Bob Swift
@@ -27,24 +27,25 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from PyQt5 import QtCore
+from PyQt6 import QtCore
 
 from picard.const import PICARD_URLS
 from picard.formats import supported_extensions
+from picard.i18n import gettext as _
 from picard.util import versions
 
 from picard.ui import (
     PicardDialog,
     SingletonDialog,
 )
-from picard.ui.ui_aboutdialog import Ui_AboutDialog
+from picard.ui.forms.ui_aboutdialog import Ui_AboutDialog
 
 
 class AboutDialog(PicardDialog, SingletonDialog):
 
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        super().__init__(parent=parent)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         self.ui = Ui_AboutDialog()
         self.ui.setupUi(self)
         self._update_content()
@@ -61,7 +62,7 @@ class AboutDialog(PicardDialog, SingletonDialog):
             if name != 'version'])
 
         args['formats'] = ", ".join(map(lambda x: x[1:], supported_extensions()))
-        args['copyright_years'] = '2004-2021'
+        args['copyright_years'] = '2004-2024'
         args['authors_credits'] = ", ".join([
             'Robert Kaye',
             'Lukáš Lalinský',
@@ -71,12 +72,12 @@ class AboutDialog(PicardDialog, SingletonDialog):
         ])
 
         # TR: Replace this with your name to have it appear in the "About" dialog.
-        args["translator_credits"] = _("translator-credits")
-        if args["translator_credits"] != "translator-credits":
+        args['translator_credits'] = _('translator-credits')
+        if args['translator_credits'] != 'translator-credits':
             # TR: Replace LANG with language you are translating to.
-            args["translator_credits"] = _("<br/>Translated to LANG by %s") % args["translator_credits"].replace("\n", "<br/>")
+            args['translator_credits'] = _("<br/>Translated to LANG by %s") % args['translator_credits'].replace("\n", "<br/>")
         else:
-            args["translator_credits"] = ""
+            args['translator_credits'] = ""
         args['icons_credits'] = _(
             'Icons made by Sambhav Kothari <sambhavs.email@gmail.com> '
             'and <a href="http://www.flaticon.com/authors/madebyoliver">Madebyoliver</a>, '

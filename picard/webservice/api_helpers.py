@@ -3,8 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2017 Sambhav Kothari
-# Copyright (C) 2018, 2020-2021 Laurent Monin
-# Copyright (C) 2018-2021 Philipp Wolfer
+# Copyright (C) 2018, 2020-2021, 2023-2024 Laurent Monin
+# Copyright (C) 2018-2023 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,31 +22,35 @@
 
 
 import re
+from xml.sax.saxutils import quoteattr  # nosec: B404
 
-from PyQt5.QtCore import QUrl
+from PyQt6.QtCore import QUrl
 
 from picard import PICARD_VERSION_STR
 from picard.config import get_config
 from picard.const import (
-    ACOUSTID_HOST,
     ACOUSTID_KEY,
-    ACOUSTID_PORT,
-    CAA_HOST,
-    CAA_PORT,
+    ACOUSTID_URL,
+    MUSICBRAINZ_SERVERS,
 )
+from picard.util import encoded_queryargs
 from picard.webservice import (
     CLIENT_STRING,
-    DEFAULT_RESPONSE_PARSER_TYPE,
     ratecontrol,
 )
+from picard.webservice.utils import host_port_to_url
 
 
-ratecontrol.set_minimum_delay((ACOUSTID_HOST, ACOUSTID_PORT), 333)
-ratecontrol.set_minimum_delay((CAA_HOST, CAA_PORT), 0)
+ratecontrol.set_minimum_delay_for_url(ACOUSTID_URL, 333)
 
 
 def escape_lucene_query(text):
     return re.sub(r'([+\-&|!(){}\[\]\^"~*?:\\/])', r'\\\1', text)
+
+
+def build_lucene_query(args):
+    return ' '.join('%s:(%s)' % (item, escape_lucene_query(value))
+                    for item, value in args.items() if value)
 
 
 def _wrap_xml_metadata(data):
@@ -55,134 +59,116 @@ def _wrap_xml_metadata(data):
             % data)
 
 
-class APIHelper(object):
+class APIHelper:
+    _base_url = None
 
-    def __init__(self, host, port, api_path, webservice):
-        self._host = host
-        self._port = port
-        self.api_path = api_path
+    def __init__(self, webservice, base_url=None):
         self._webservice = webservice
+        if base_url is not None:
+            self.base_url = base_url
+
+    @property
+    def base_url(self):
+        if self._base_url is None:
+            raise ValueError("base_url undefined")
+        return self._base_url
+
+    @base_url.setter
+    def base_url(self, url):
+        if not isinstance(url, QUrl):
+            url = QUrl(url)
+        self._base_url = url
 
     @property
     def webservice(self):
         return self._webservice
 
-    @property
-    def host(self):
-        return self._host
+    def url_from_path(self, path):
+        url = QUrl(self.base_url)
+        url.setPath(url.path() + path)
+        return url
 
-    @property
-    def port(self):
-        return self._port
+    def get(self, path, handler, **kwargs):
+        kwargs['url'] = self.url_from_path(path)
+        kwargs['handler'] = handler
+        return self._webservice.get_url(**kwargs)
 
-    def get(self, path_list, handler, priority=False, important=False, mblogin=False,
-            cacheloadcontrol=None, refresh=False, queryargs=None, parse_response_type=DEFAULT_RESPONSE_PARSER_TYPE):
-        path = self.api_path + "/".join(path_list)
-        return self._webservice.get(self.host, self.port, path, handler,
-                                    priority=priority, important=important, mblogin=mblogin,
-                                    refresh=refresh, queryargs=queryargs, parse_response_type=parse_response_type)
+    def post(self, path, data, handler, **kwargs):
+        kwargs['url'] = self.url_from_path(path)
+        kwargs['handler'] = handler
+        kwargs['data'] = data
+        kwargs['mblogin'] = kwargs.get('mblogin', True)
+        return self._webservice.post_url(**kwargs)
 
-    def post(self, path_list, data, handler, priority=False, important=False,
-             mblogin=True, queryargs=None, parse_response_type=DEFAULT_RESPONSE_PARSER_TYPE,
-             request_mimetype=None):
-        path = self.api_path + "/".join(path_list)
-        return self._webservice.post(self.host, self.port, path, data, handler,
-                                     priority=priority, important=important, mblogin=mblogin,
-                                     queryargs=queryargs, parse_response_type=parse_response_type,
-                                     request_mimetype=request_mimetype)
+    def put(self, path, data, handler, **kwargs):
+        kwargs['url'] = self.url_from_path(path)
+        kwargs['handler'] = handler
+        kwargs['data'] = data
+        kwargs['priority'] = kwargs.get('priority', True)
+        kwargs['mblogin'] = kwargs.get('mblogin', True)
+        return self._webservice.put_url(**kwargs)
 
-    def put(self, path_list, data, handler, priority=True, important=False,
-            mblogin=True, queryargs=None, request_mimetype=None):
-        path = self.api_path + "/".join(path_list)
-        return self._webservice.put(self.host, self.port, path, data, handler,
-                                    priority=priority, important=important, mblogin=mblogin,
-                                    queryargs=queryargs, request_mimetype=request_mimetype)
-
-    def delete(self, path_list, handler, priority=True, important=False,
-               mblogin=True, queryargs=None):
-        path = self.api_path + "/".join(path_list)
-        return self._webservice.delete(self.host, self.port, path, handler,
-                                       priority=priority, important=important, mblogin=mblogin,
-                                       queryargs=queryargs)
+    def delete(self, path, handler, **kwargs):
+        kwargs['url'] = self.url_from_path(path)
+        kwargs['handler'] = handler
+        kwargs['priority'] = kwargs.get('priority', True)
+        kwargs['mblogin'] = kwargs.get('mblogin', True)
+        return self._webservice.delete_url(**kwargs)
 
 
 class MBAPIHelper(APIHelper):
-
-    def __init__(self, webservice):
-        super().__init__(None, None, "/ws/2/", webservice)
-
     @property
-    def host(self):
+    def base_url(self):
+        # we have to keep it dynamic since host/port can be changed via options
         config = get_config()
-        return config.setting['server_host']
+        host = config.setting['server_host']
+        # FIXME: We should get rid of this hard coded exception and move the
+        #        configuration to use proper URLs everywhere.
+        port = 443 if host in MUSICBRAINZ_SERVERS else config.setting['server_port']
+        self._base_url = host_port_to_url(host, port)
+        self._base_url.setPath('/ws/2')
+        return self._base_url
 
-    @property
-    def port(self):
-        config = get_config()
-        return config.setting['server_port']
-
-    def _get_by_id(self, entitytype, entityid, handler, inc=None, queryargs=None,
-                   priority=False, important=False, mblogin=False, refresh=False):
-        path_list = [entitytype, entityid]
-        if queryargs is None:
-            queryargs = {}
+    def _get_by_id(self, entitytype, entityid, handler, inc=None, **kwargs):
         if inc:
-            queryargs["inc"] = "+".join(inc)
-        return self.get(path_list, handler,
-                        priority=priority, important=important, mblogin=mblogin,
-                        refresh=refresh, queryargs=queryargs)
+            kwargs['unencoded_queryargs'] = kwargs.get('queryargs', {})
+            kwargs['unencoded_queryargs']['inc'] = self._make_inc_arg(inc)
+        return self.get(f"/{entitytype}/{entityid}", handler, **kwargs)
 
-    def get_release_by_id(self, releaseid, handler, inc=None,
-                          priority=False, important=False, mblogin=False, refresh=False):
-        if inc is None:
-            inc = []
-        return self._get_by_id('release', releaseid, handler, inc,
-                               priority=priority, important=important, mblogin=mblogin, refresh=refresh)
+    def get_release_by_id(self, releaseid, handler, inc=None, **kwargs):
+        return self._get_by_id('release', releaseid, handler, inc, **kwargs)
 
-    def get_track_by_id(self, trackid, handler, inc=None,
-                        priority=False, important=False, mblogin=False, refresh=False):
-        if inc is None:
-            inc = []
-        return self._get_by_id('recording', trackid, handler, inc,
-                               priority=priority, important=important, mblogin=mblogin, refresh=refresh)
+    def get_track_by_id(self, trackid, handler, inc=None, **kwargs):
+        return self._get_by_id('recording', trackid, handler, inc, **kwargs)
 
     def lookup_discid(self, discid, handler, priority=True, important=True, refresh=False):
-        inc = ['artist-credits', 'labels']
-        return self._get_by_id('discid', discid, handler, inc, queryargs={"cdstubs": "no"},
+        inc = ('artist-credits', 'labels')
+        return self._get_by_id('discid', discid, handler, inc, queryargs={'cdstubs': 'no'},
                                priority=priority, important=important, refresh=refresh)
 
     def _find(self, entitytype, handler, **kwargs):
-        filters = []
+        filters = {}
 
-        limit = kwargs.pop("limit")
+        limit = kwargs.pop('limit')
         if limit:
-            filters.append(("limit", limit))
+            filters['limit'] = limit
 
-        is_search = kwargs.pop("search", False)
+        is_search = kwargs.pop('search', False)
         if is_search:
             config = get_config()
-            use_advanced_search = kwargs.pop("advanced_search", config.setting["use_adv_search_syntax"])
+            use_advanced_search = kwargs.pop('advanced_search', config.setting['use_adv_search_syntax'])
             if use_advanced_search:
-                query = kwargs["query"]
+                query = kwargs['query']
             else:
-                query = escape_lucene_query(kwargs["query"]).strip().lower()
-                filters.append(("dismax", 'true'))
+                query = escape_lucene_query(kwargs['query']).strip().lower()
+                filters['dismax'] = 'true'
         else:
-            query = []
-            for name, value in kwargs.items():
-                value = escape_lucene_query(value).strip().lower()
-                if value:
-                    query.append('%s:(%s)' % (name, value))
-            query = ' '.join(query)
+            query = build_lucene_query(kwargs)
 
         if query:
-            filters.append(("query", query))
-        queryargs = {}
-        for name, value in filters:
-            queryargs[name] = bytes(QUrl.toPercentEncoding(str(value))).decode()
+            filters['query'] = query
 
-        path_list = [entitytype]
-        return self.get(path_list, handler, queryargs=queryargs,
+        return self.get(f"/{entitytype}", handler, unencoded_queryargs=filters,
                         priority=True, important=True, mblogin=False,
                         refresh=False)
 
@@ -195,101 +181,121 @@ class MBAPIHelper(APIHelper):
     def find_artists(self, handler, **kwargs):
         return self._find('artist', handler, **kwargs)
 
-    def _browse(self, entitytype, handler, inc=None, **kwargs):
-        path_list = [entitytype]
-        queryargs = kwargs
+    @staticmethod
+    def _make_inc_arg(inc):
+        """
+        Convert an iterable to a string to be passed as inc paramater to MB
+
+        It drops non-unique and empty elements, and sort them before joining
+        them as a '+'-separated string
+        """
+        return '+'.join(sorted(set(str(e) for e in inc if e)))
+
+    def _browse(self, entitytype, handler, inc=None, queryargs=None, mblogin=False):
+        if queryargs is None:
+            queryargs = {}
         if inc:
-            queryargs["inc"] = "+".join(inc)
-        return self.get(path_list, handler, queryargs=queryargs,
-                        priority=True, important=True, mblogin=False,
+            queryargs['inc'] = self._make_inc_arg(inc)
+        return self.get(f"/{entitytype}", handler, unencoded_queryargs=queryargs,
+                        priority=True, important=True, mblogin=mblogin,
                         refresh=False)
 
     def browse_releases(self, handler, **kwargs):
-        inc = ["media", "labels"]
-        return self._browse("release", handler, inc, **kwargs)
+        inc = ('media', 'labels')
+        return self._browse('release', handler, inc, queryargs=kwargs)
+
+    def browse_recordings(self, handler, inc, **kwargs):
+        return self._browse('recording', handler, inc, queryargs=kwargs)
+
+    @staticmethod
+    def _xml_ratings(ratings):
+        recordings = ''.join(
+            '<recording id=%s><user-rating>%s</user-rating></recording>' %
+            (quoteattr(i[1]), int(j)*20) for i, j in ratings.items() if i[0] == 'recording'
+        )
+        return _wrap_xml_metadata('<recording-list>%s</recording-list>' % recordings)
 
     def submit_ratings(self, ratings, handler):
-        path_list = ['rating']
-        params = {"client": CLIENT_STRING}
-        recordings = (''.join(['<recording id="%s"><user-rating>%s</user-rating></recording>' %
-            (i[1], j*20) for i, j in ratings.items() if i[0] == 'recording']))
-
-        data = _wrap_xml_metadata('<recording-list>%s</recording-list>' % recordings)
-        return self.post(path_list, data, handler, priority=True,
-                         queryargs=params, parse_response_type="xml",
-                         request_mimetype="application/xml; charset=utf-8")
+        params = {'client': CLIENT_STRING}
+        data = self._xml_ratings(ratings)
+        return self.post("/rating", data, handler, priority=True,
+                         unencoded_queryargs=params, parse_response_type='xml',
+                         request_mimetype='application/xml; charset=utf-8')
 
     def get_collection(self, collection_id, handler, limit=100, offset=0):
-        path_list = ["collection"]
-        queryargs = None
         if collection_id is not None:
-            inc = ["releases", "artist-credits", "media"]
-            path_list.extend([collection_id, "releases"])
-            queryargs = {}
-            queryargs["inc"] = "+".join(inc)
-            queryargs["limit"] = limit
-            queryargs["offset"] = offset
-        return self.get(path_list, handler, priority=True, important=True,
-                        mblogin=True, queryargs=queryargs)
+            inc = ('releases', 'artist-credits', 'media')
+            path = f"/collection/{collection_id}/releases"
+            queryargs = {
+                'inc': self._make_inc_arg(inc),
+                'limit': limit,
+                'offset': offset,
+            }
+        else:
+            path = '/collection'
+            queryargs = None
+        return self.get(path, handler, priority=True, important=True,
+                        mblogin=True, unencoded_queryargs=queryargs)
 
     def get_collection_list(self, handler):
         return self.get_collection(None, handler)
 
     @staticmethod
-    def _collection_request(collection_id, releases):
-        while releases:
-            ids = ";".join(releases if len(releases) <= 400 else releases[:400])
-            releases = releases[400:]
-            yield ["collection", collection_id, "releases", ids]
+    def _collection_request(collection_id, releases, batchsize=400):
+        for i in range(0, len(releases), batchsize):
+            ids = ';'.join(releases[i:i+batchsize])
+            yield f"/collection/{collection_id}/releases/{ids}"
 
     @staticmethod
     def _get_client_queryarg():
-        return {"client": CLIENT_STRING}
+        return {'client': CLIENT_STRING}
 
     def put_to_collection(self, collection_id, releases, handler):
-        for path_list in self._collection_request(collection_id, releases):
-            self.put(path_list, "", handler,
-                     queryargs=self._get_client_queryarg())
+        for path in self._collection_request(collection_id, releases):
+            self.put(path, "", handler,
+                     unencoded_queryargs=self._get_client_queryarg())
 
     def delete_from_collection(self, collection_id, releases, handler):
-        for path_list in self._collection_request(collection_id, releases):
-            self.delete(path_list, handler,
-                        queryargs=self._get_client_queryarg())
+        for path in self._collection_request(collection_id, releases):
+            self.delete(path, handler,
+                        unencoded_queryargs=self._get_client_queryarg())
 
 
 class AcoustIdAPIHelper(APIHelper):
 
-    def __init__(self, webservice):
-        super().__init__(ACOUSTID_HOST, ACOUSTID_PORT,
-                         '/v2/', webservice)
+    client_key = ACOUSTID_KEY
+    client_version = PICARD_VERSION_STR
 
-    @staticmethod
-    def _encode_acoustid_args(args, format_='json'):
-        filters = []
-        args['client'] = ACOUSTID_KEY
-        args['clientversion'] = PICARD_VERSION_STR
-        args['format'] = format_
-        for name, value in args.items():
-            value = bytes(QUrl.toPercentEncoding(value)).decode()
-            filters.append('%s=%s' % (name, value))
-        return '&'.join(filters)
+    def __init__(self, webservice):
+        super().__init__(webservice, base_url=ACOUSTID_URL)
+
+    def _encode_acoustid_args(self, args):
+        args['client'] = self.client_key
+        args['clientversion'] = self.client_version
+        args['format'] = 'json'
+        return '&'.join((k + '=' + v for k, v in encoded_queryargs(args).items()))
 
     def query_acoustid(self, handler, **args):
-        path_list = ['lookup']
         body = self._encode_acoustid_args(args)
-        return self.post(path_list, body, handler, priority=False, important=False,
-                         mblogin=False, request_mimetype="application/x-www-form-urlencoded")
+        return self.post(
+            "/lookup", body, handler, priority=False, important=False,
+            mblogin=False, request_mimetype='application/x-www-form-urlencoded'
+        )
+
+    @staticmethod
+    def _submissions_to_args(submissions):
+        config = get_config()
+        args = {'user': config.setting['acoustid_apikey']}
+        for i, submission in enumerate(submissions):
+            for key, value in submission.args.items():
+                if value:
+                    args[".".join((key, str(i)))] = value
+        return args
 
     def submit_acoustid_fingerprints(self, submissions, handler):
-        path_list = ['submit']
-        config = get_config()
-        args = {'user': config.setting["acoustid_apikey"]}
-        for i, submission in enumerate(submissions):
-            args['fingerprint.%d' % i] = submission.fingerprint
-            args['duration.%d' % i] = str(submission.duration)
-            args['mbid.%d' % i] = submission.recordingid
-            if submission.puid:
-                args['puid.%d' % i] = submission.puid
-        body = self._encode_acoustid_args(args, format_='json')
-        return self.post(path_list, body, handler, priority=True, important=False,
-                         mblogin=False, request_mimetype="application/x-www-form-urlencoded")
+        args = self._submissions_to_args(submissions)
+        body = self._encode_acoustid_args(args)
+        return self.post(
+            "/submit", body, handler, priority=True, important=False,
+            mblogin=False, request_mimetype='application/x-www-form-urlencoded'
+        )

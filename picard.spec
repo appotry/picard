@@ -5,8 +5,6 @@ import os
 import platform
 import sys
 
-# Get the version and build a CFBundleVersion compatible version
-# of it according to Apple dev documentation
 sys.path.insert(0, '.')
 from picard import (
     PICARD_APP_ID,
@@ -22,8 +20,9 @@ def _picard_get_locale_files():
     locales = []
     path_domain = {
         'po': 'picard',
-        os.path.join('po', 'countries'): 'picard-countries',
         os.path.join('po', 'attributes'): 'picard-attributes',
+        os.path.join('po', 'constants'): 'picard-constants',
+        os.path.join('po', 'countries'): 'picard-countries',
     }
     for path, domain in path_domain.items():
         for filepath in glob.glob(os.path.join(path, '*.po')):
@@ -44,15 +43,14 @@ def get_locale_messages():
 
 block_cipher = None
 os_name = platform.system()
+build_portable = bool(os.environ.get('PICARD_BUILD_PORTABLE'))
 binaries = []
 
 data_files = get_locale_messages()
 
 fpcalc_name = 'fpcalc'
-ab_extractor_name = 'streaming_extractor_music'
 if os_name == 'Windows':
     fpcalc_name = 'fpcalc.exe'
-    ab_extractor_name = 'streaming_extractor_music.exe'
     binaries += [('discid.dll', '.')]
     data_files.append((os.path.join('resources', 'win10', '*'), '.'))
 
@@ -62,15 +60,12 @@ if os_name == 'Darwin':
 if os.path.isfile(fpcalc_name):
     binaries += [(fpcalc_name, '.')]
 
-if os.path.isfile(ab_extractor_name):
-    binaries += [(ab_extractor_name, '.')]
-
 runtime_hooks = []
 if os_name == 'Windows':
     runtime_hooks.append('scripts/pyinstaller/win-startup-hook.py')
 elif os_name == 'Darwin':
     runtime_hooks.append('scripts/pyinstaller/macos-library-path-hook.py')
-if '--onefile' in sys.argv:
+if build_portable:
     runtime_hooks.append('scripts/pyinstaller/portable-hook.py')
 
 
@@ -91,7 +86,7 @@ pyz = PYZ(a.pure, a.zipped_data,
           cipher=block_cipher)
 
 
-if '--onefile' in sys.argv:
+if build_portable:
     exe = EXE(pyz,
               a.scripts,
               a.binaries,
@@ -135,9 +130,9 @@ else:
             'CFBundleDisplayName': PICARD_DISPLAY_NAME,
             'CFBundleIdentifier': PICARD_APP_ID,
             'CFBundleVersion': '%d.%d.%d' % PICARD_VERSION[:3],
-            'CFBundleShortVersionString': PICARD_VERSION.to_string(short=True),
+            'CFBundleShortVersionString': PICARD_VERSION.short_str(),
             'LSApplicationCategoryType': 'public.app-category.music',
-            'LSMinimumSystemVersion': os.environ.get('MACOSX_DEPLOYMENT_TARGET', '10.12'),
+            'LSMinimumSystemVersion': os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0'),
             'NSHighResolutionCapable': True,
             'NSPrincipalClass': 'NSApplication',
             'NSRequiresAquaSystemAppearance': False,

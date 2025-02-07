@@ -3,7 +3,7 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2017 Sambhav Kothari
-# Copyright (C) 2018-2020 Philipp Wolfer
+# Copyright (C) 2018-2020, 2023 Philipp Wolfer
 # Copyright (C) 2020 Ray Bouchard
 # Copyright (C) 2020-2021 Laurent Monin
 #
@@ -142,3 +142,7 @@ def parse_recording(recording):
         recording_mb['sources'] = recording['sources']
 
     return recording_mb
+
+
+def recording_has_metadata(recording):
+    return 'id' in recording and recording.get('title') is not None
