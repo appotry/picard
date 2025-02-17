@@ -4,13 +4,13 @@
 #
 # Copyright (C) 2006-2008, 2011 Lukáš Lalinský
 # Copyright (C) 2008-2009 Nikolai Prokoschenko
-# Copyright (C) 2009-2010, 2014-2015, 2018-2021 Philipp Wolfer
+# Copyright (C) 2009-2010, 2014-2015, 2018-2022, 2024-2025 Philipp Wolfer
 # Copyright (C) 2011-2013 Michael Wiencek
 # Copyright (C) 2011-2013 Wieland Hoffmann
 # Copyright (C) 2013 Calvin Walton
 # Copyright (C) 2013 Ionuț Ciocîrlan
 # Copyright (C) 2013-2014 Sophist-UK
-# Copyright (C) 2013-2015, 2018-2021 Laurent Monin
+# Copyright (C) 2013-2015, 2018-2024 Laurent Monin
 # Copyright (C) 2015 Alex Berman
 # Copyright (C) 2015 Ohm Patel
 # Copyright (C) 2016 Suhas
@@ -33,25 +33,22 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from functools import partial
 import os.path
 
-from PyQt5 import QtWidgets
-from PyQt5.QtCore import QStandardPaths
-from PyQt5.QtGui import QPalette
+from PyQt6.QtGui import QPalette
 
-from picard.config import (
-    BoolOption,
-    TextOption,
-    get_config,
+from picard.config import get_config
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import (
+    N_,
+    gettext as _,
 )
-from picard.const.sys import IS_WIN
 from picard.script import ScriptParser
 
+from picard.ui.forms.ui_options_renaming import Ui_RenamingOptionsPage
 from picard.ui.options import (
     OptionsCheckError,
     OptionsPage,
-    register_options_page,
 )
 from picard.ui.options.scripting import (
     ScriptCheckError,
@@ -63,57 +60,42 @@ from picard.ui.scripteditor import (
     populate_script_selection_combo_box,
     synchronize_vertical_scrollbars,
 )
-from picard.ui.ui_options_renaming import Ui_RenamingOptionsPage
-from picard.ui.util import enabledSlot
-
-
-_default_music_dir = QStandardPaths.writableLocation(QStandardPaths.MusicLocation)
+from picard.ui.util import FileDialog
 
 
 class RenamingOptionsPage(OptionsPage):
 
-    NAME = "filerenaming"
+    NAME = 'filerenaming'
     TITLE = N_("File Naming")
     PARENT = None
     SORT_ORDER = 40
     ACTIVE = True
-    HELP_URL = '/config/options_filerenaming.html'
+    HELP_URL = "/config/options_filerenaming.html"
 
-    options = [
-        BoolOption("setting", "windows_compatibility", True),
-        BoolOption("setting", "ascii_filenames", False),
-        BoolOption("setting", "rename_files", False),
-        BoolOption("setting", "move_files", False),
-        TextOption("setting", "move_files_to", _default_music_dir),
-        BoolOption("setting", "move_additional_files", False),
-        TextOption("setting", "move_additional_files_pattern", "*.jpg *.png"),
-        BoolOption("setting", "delete_empty_dirs", True),
-    ]
+    OPTIONS = (
+        ('move_files', ['move_files']),
+        ('move_files_to', ['move_files_to']),
+        ('move_additional_files', ['move_additional_files']),
+        ('move_additional_files_pattern', ['move_additional_files_pattern']),
+        ('delete_empty_dirs', ['delete_empty_dirs']),
+        ('rename_files', ['rename_files']),
+        ('selected_file_naming_script_id', ['naming_script_selector']),
+    )
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.script_text = ""
+        self.compat_options = {}
         self.ui = Ui_RenamingOptionsPage()
         self.ui.setupUi(self)
 
-        self.ui.ascii_filenames.clicked.connect(self.update_examples_from_local)
-        self.ui.windows_compatibility.clicked.connect(self.update_examples_from_local)
         self.ui.rename_files.clicked.connect(self.update_examples_from_local)
         self.ui.move_files.clicked.connect(self.update_examples_from_local)
         self.ui.move_files_to.editingFinished.connect(self.update_examples_from_local)
 
-        self.ui.move_files.toggled.connect(
-            partial(
-                enabledSlot,
-                self.toggle_file_moving
-            )
-        )
-        self.ui.rename_files.toggled.connect(
-            partial(
-                enabledSlot,
-                self.toggle_file_renaming
-            )
-        )
+        self.ui.move_files.toggled.connect(self.toggle_file_naming_format)
+        self.ui.rename_files.toggled.connect(self.toggle_file_naming_format)
+        self.toggle_file_naming_format(None)
         self.ui.open_script_editor.clicked.connect(self.show_script_editing_page)
         self.ui.move_files_to_browse.clicked.connect(self.move_files_to_browse)
 
@@ -125,8 +107,8 @@ class RenamingOptionsPage(OptionsPage):
         script_edit = self.ui.move_additional_files_pattern
         self.script_palette_normal = script_edit.palette()
         self.script_palette_readonly = QPalette(self.script_palette_normal)
-        disabled_color = self.script_palette_normal.color(QPalette.Inactive, QPalette.Window)
-        self.script_palette_readonly.setColor(QPalette.Disabled, QPalette.Base, disabled_color)
+        disabled_color = self.script_palette_normal.color(QPalette.ColorGroup.Inactive, QPalette.ColorRole.Window)
+        self.script_palette_readonly.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Base, disabled_color)
 
         self.ui.example_filename_sample_files_button.clicked.connect(self.update_example_files)
 
@@ -204,23 +186,9 @@ class RenamingOptionsPage(OptionsPage):
     def show_scripting_documentation(self):
         ScriptingDocumentationDialog.show_instance(parent=self)
 
-    def toggle_file_moving(self, state):
-        self.toggle_file_naming_format()
-        self.ui.delete_empty_dirs.setEnabled(state)
-        self.ui.move_files_to.setEnabled(state)
-        self.ui.move_files_to_browse.setEnabled(state)
-        self.ui.move_additional_files.setEnabled(state)
-        self.ui.move_additional_files_pattern.setEnabled(state)
-
-    def toggle_file_renaming(self, state):
-        self.toggle_file_naming_format()
-
-    def toggle_file_naming_format(self):
+    def toggle_file_naming_format(self, state):
         active = self.ui.move_files.isChecked() or self.ui.rename_files.isChecked()
         self.ui.open_script_editor.setEnabled(active)
-        self.ui.ascii_filenames.setEnabled(active)
-        if not IS_WIN:
-            self.ui.windows_compatibility.setEnabled(active)
 
     def save_from_editor(self):
         self.script_text = self.script_editor_dialog.get_script()
@@ -235,13 +203,10 @@ class RenamingOptionsPage(OptionsPage):
         self.update_displayed_examples()
 
     def update_examples_from_local(self):
-        override = {
-            'ascii_filenames': self.ui.ascii_filenames.isChecked(),
-            'move_files': self.ui.move_files.isChecked(),
-            'move_files_to': os.path.normpath(self.ui.move_files_to.text()),
-            'rename_files': self.ui.rename_files.isChecked(),
-            'windows_compatibility': self.ui.windows_compatibility.isChecked(),
-        }
+        override = dict(self.compat_options)
+        override['move_files'] = self.ui.move_files.isChecked()
+        override['move_files_to'] = os.path.normpath(self.ui.move_files_to.text())
+        override['rename_files'] = self.ui.rename_files.isChecked()
         self.examples.update_examples(override=override)
         self.update_displayed_examples()
 
@@ -257,26 +222,29 @@ class RenamingOptionsPage(OptionsPage):
         self.examples.update_example_listboxes(self.ui.example_filename_before, self.ui.example_filename_after)
 
     def load(self):
+        # React to changes of compat options
+        compat_page = self.dialog.get_page('filerenaming_compat')
+        self.compat_options = compat_page.get_options()
+        compat_page.options_changed.connect(self.on_compat_options_changed)
+
         config = get_config()
-        if IS_WIN:
-            self.ui.windows_compatibility.setChecked(True)
-            self.ui.windows_compatibility.setEnabled(False)
-        else:
-            self.ui.windows_compatibility.setChecked(config.setting["windows_compatibility"])
-        self.ui.rename_files.setChecked(config.setting["rename_files"])
-        self.ui.move_files.setChecked(config.setting["move_files"])
-        self.ui.ascii_filenames.setChecked(config.setting["ascii_filenames"])
-        self.ui.move_files_to.setText(config.setting["move_files_to"])
+        self.ui.rename_files.setChecked(config.setting['rename_files'])
+        self.ui.move_files.setChecked(config.setting['move_files'])
+        self.ui.move_files_to.setText(config.setting['move_files_to'])
         self.ui.move_files_to.setCursorPosition(0)
-        self.ui.move_additional_files.setChecked(config.setting["move_additional_files"])
-        self.ui.move_additional_files_pattern.setText(config.setting["move_additional_files_pattern"])
-        self.ui.delete_empty_dirs.setChecked(config.setting["delete_empty_dirs"])
-        self.naming_scripts = config.setting["file_renaming_scripts"]
-        self.selected_naming_script_id = config.setting["selected_file_naming_script_id"]
+        self.ui.move_additional_files.setChecked(config.setting['move_additional_files'])
+        self.ui.move_additional_files_pattern.setText(config.setting['move_additional_files_pattern'])
+        self.ui.delete_empty_dirs.setChecked(config.setting['delete_empty_dirs'])
+        self.naming_scripts = config.setting['file_renaming_scripts']
+        self.selected_naming_script_id = config.setting['selected_file_naming_script_id']
         if self.script_editor_dialog:
             self.script_editor_dialog.load()
         else:
             self.update_selector_from_settings()
+        self.update_examples_from_local()
+
+    def on_compat_options_changed(self, options):
+        self.compat_options = options
         self.update_examples_from_local()
 
     def check(self):
@@ -296,18 +264,13 @@ class RenamingOptionsPage(OptionsPage):
 
     def save(self):
         config = get_config()
-        config.setting["windows_compatibility"] = self.ui.windows_compatibility.isChecked()
-        config.setting["ascii_filenames"] = self.ui.ascii_filenames.isChecked()
-        config.setting["rename_files"] = self.ui.rename_files.isChecked()
-        config.setting["move_files"] = self.ui.move_files.isChecked()
-        config.setting["move_files_to"] = os.path.normpath(self.ui.move_files_to.text())
-        config.setting["move_additional_files"] = self.ui.move_additional_files.isChecked()
-        config.setting["move_additional_files_pattern"] = self.ui.move_additional_files_pattern.text()
-        config.setting["delete_empty_dirs"] = self.ui.delete_empty_dirs.isChecked()
-        config.setting["selected_file_naming_script_id"] = self.selected_naming_script_id
-        self.tagger.window.enable_renaming_action.setChecked(config.setting["rename_files"])
-        self.tagger.window.enable_moving_action.setChecked(config.setting["move_files"])
-        self.tagger.window.make_script_selector_menu()
+        config.setting['rename_files'] = self.ui.rename_files.isChecked()
+        config.setting['move_files'] = self.ui.move_files.isChecked()
+        config.setting['move_files_to'] = os.path.normpath(self.ui.move_files_to.text())
+        config.setting['move_additional_files'] = self.ui.move_additional_files.isChecked()
+        config.setting['move_additional_files_pattern'] = self.ui.move_additional_files_pattern.text()
+        config.setting['delete_empty_dirs'] = self.ui.delete_empty_dirs.isChecked()
+        config.setting['selected_file_naming_script_id'] = self.selected_naming_script_id
 
     def display_error(self, error):
         # Ignore scripting errors, those are handled inline
@@ -315,7 +278,10 @@ class RenamingOptionsPage(OptionsPage):
             super().display_error(error)
 
     def move_files_to_browse(self):
-        path = QtWidgets.QFileDialog.getExistingDirectory(self, "", self.ui.move_files_to.text())
+        path = FileDialog.getExistingDirectory(
+            parent=self,
+            dir=self.ui.move_files_to.text(),
+        )
         if path:
             path = os.path.normpath(path)
             self.ui.move_files_to.setText(path)

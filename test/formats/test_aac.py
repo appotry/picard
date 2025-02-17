@@ -3,7 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2019 Philipp Wolfer
-# Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2020-2022 Laurent Monin
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -41,6 +42,7 @@ class AACTest(CommonTests.SimpleFormatsTestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~bitrate': '123.824',
+        '~filesize': '1896',
     }
     unexpected_info = ['~video']
 
@@ -53,6 +55,7 @@ class AACWithAPETest(CommonApeTests.ApeTestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~bitrate': '123.824',
+        '~filesize': '1974',
     }
     unexpected_info = ['~video']
 

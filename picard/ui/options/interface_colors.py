@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2021 Laurent Monin
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2024 Laurent Monin
+# Copyright (C) 2019-2025 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,23 +22,27 @@
 
 from functools import partial
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
 
-from picard.config import Option
+from picard.const.sys import IS_MACOS
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import (
+    N_,
+    gettext as _,
+    sort_key,
+)
+from picard.util import icontheme
 
-from picard.ui.colors import (
-    InterfaceColors,
-    interface_colors,
+from picard.ui.colors import interface_colors
+from picard.ui.forms.ui_options_interface_colors import (
+    Ui_InterfaceColorsOptionsPage,
 )
-from picard.ui.options import (
-    OptionsPage,
-    register_options_page,
-)
-from picard.ui.ui_options_interface_colors import Ui_InterfaceColorsOptionsPage
+from picard.ui.options import OptionsPage
+from picard.ui.util import changes_require_restart_warning
 
 
 class ColorButton(QtWidgets.QPushButton):
@@ -47,15 +51,20 @@ class ColorButton(QtWidgets.QPushButton):
 
     def __init__(self, initial_color=None, parent=None):
         super().__init__('    ', parent=parent)
-
+        # On macOS the style override in picard.ui.theme breaks styling these
+        # buttons. Explicitly reset the style for this widget only.
+        if IS_MACOS:
+            self.setStyle(QtWidgets.QStyleFactory.create('macos'))
         color = QtGui.QColor(initial_color)
         if not color.isValid():
-            color = QtGui.QColor("black")
+            color = QtGui.QColor('black')
         self.color = color
         self.clicked.connect(self.open_color_dialog)
         self.update_color()
 
-    def update_color(self):
+    def update_color(self, qcolor=None):
+        if qcolor is not None:
+            self.color = qcolor
         self.setStyleSheet("QPushButton { background-color: %s; }" % self.color.name())
 
     def open_color_dialog(self):
@@ -84,20 +93,20 @@ def delete_items_of_layout(layout):
 
 class InterfaceColorsOptionsPage(OptionsPage):
 
-    NAME = "interface_colors"
+    NAME = 'interface_colors'
     TITLE = N_("Colors")
-    PARENT = "interface"
+    PARENT = 'interface'
     SORT_ORDER = 30
     ACTIVE = True
-    HELP_URL = '/config/options_interface_colors.html'
+    HELP_URL = "/config/options_interface_colors.html"
 
-    options = [
-        Option("setting", "interface_colors", InterfaceColors(dark_theme=False).get_colors()),
-        Option("setting", "interface_colors_dark", InterfaceColors(dark_theme=True).get_colors()),
-    ]
+    OPTIONS = (
+        ('interface_colors', ['colors']),
+        ('interface_colors_dark', ['colors']),
+    )
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = Ui_InterfaceColorsOptionsPage()
         self.ui.setupUi(self)
         self.new_colors = {}
@@ -111,24 +120,47 @@ class InterfaceColorsOptionsPage(OptionsPage):
         def color_changed(color_key, color_value):
             interface_colors.set_color(color_key, color_value)
 
-        for color_key, color_value in interface_colors.get_colors().items():
+        def restore_default_color(color_key, color_button):
+            interface_colors.set_default_color(color_key)
+            color_button.update_color(interface_colors.get_qcolor(color_key))
+
+        def colors():
+            for color_key, color_value in interface_colors.get_colors().items():
+                group = interface_colors.get_color_group(color_key)
+                title = interface_colors.get_color_title(color_key)
+                yield color_key, color_value, title, group
+
+        prev_group = None
+        for color_key, color_value, title, group in sorted(colors(), key=lambda c: (sort_key(c[3]), sort_key(c[2]))):
+            if prev_group != group:
+                groupbox = QtWidgets.QGroupBox(group)
+                self.colors_list.addWidget(groupbox)
+                groupbox_layout = QtWidgets.QVBoxLayout()
+                groupbox.setLayout(groupbox_layout)
+                prev_group = group
+
             widget = QtWidgets.QWidget()
 
             hlayout = QtWidgets.QHBoxLayout()
             hlayout.setContentsMargins(0, 0, 0, 0)
 
-            label = QtWidgets.QLabel(interface_colors.get_color_description(color_key))
-            label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+            label = QtWidgets.QLabel(title)
+            label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum)
             hlayout.addWidget(label)
 
-            button = ColorButton(color_value)
-            button.color_changed.connect(partial(color_changed, color_key))
-            hlayout.addWidget(button, 0, QtCore.Qt.AlignRight)
+            color_button = ColorButton(color_value)
+            color_button.color_changed.connect(partial(color_changed, color_key))
+            hlayout.addWidget(color_button, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+
+            refresh_button = QtWidgets.QPushButton(icontheme.lookup('view-refresh'), "")
+            refresh_button.setToolTip(_("Restore default color"))
+            refresh_button.clicked.connect(partial(restore_default_color, color_key, color_button))
+            hlayout.addWidget(refresh_button, 0, QtCore.Qt.AlignmentFlag.AlignRight)
 
             widget.setLayout(hlayout)
-            self.colors_list.addWidget(widget)
+            groupbox_layout.addWidget(widget)
 
-        spacerItem1 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        spacerItem1 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding)
         self.colors_list.addItem(spacerItem1)
 
     def load(self):
@@ -137,13 +169,7 @@ class InterfaceColorsOptionsPage(OptionsPage):
 
     def save(self):
         if interface_colors.save_to_config():
-            dialog = QtWidgets.QMessageBox(
-                QtWidgets.QMessageBox.Information,
-                _('Colors changed'),
-                _('You have changed the interface colors. You may have to restart Picard in order for the changes to take effect.'),
-                QtWidgets.QMessageBox.Ok,
-                self)
-            dialog.exec_()
+            changes_require_restart_warning(self, warnings=[_("You have changed the interface colors.")])
 
     def restore_defaults(self):
         interface_colors.set_default_colors()

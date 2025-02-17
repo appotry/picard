@@ -50,45 +50,42 @@ cd dist
 
 echo "Create and sign app bundle..."
 APP_BUNDLE="MusicBrainz Picard.app"
-ditto -rsrc --arch x86_64 "$APP_BUNDLE" "$APP_BUNDLE.tmp"
-rm -r "$APP_BUNDLE"
-mv "$APP_BUNDLE.tmp" "$APP_BUNDLE"
 
 if [ "$CODESIGN" = '1' ]; then
-    # Enable hardened runtime if app will get notarized
+    echo "Code signing app bundle ${APP_BUNDLE}..."
     if [ "$NOTARIZE" = "1" ]; then
+      # Enable hardened runtime if app will get notarized
       codesign --verbose --deep --force \
         --options runtime \
         --entitlements ../scripts/package/entitlements.plist \
         --keychain "$KEYCHAIN_PATH" --sign "$CERTIFICATE_NAME" \
         "$APP_BUNDLE"
       ../scripts/package/macos-notarize-app.sh "$APP_BUNDLE"
-      codesign --verbose --deep --verbose --strict=all --check-notarization "$APP_BUNDLE"
+      echo "Verifying signature and notarization for app bundle ${APP_BUNDLE}..."
+      codesign --verify --verbose --deep --strict=symlinks --check-notarization  "$APP_BUNDLE"
     else
-      codesign --verify --verbose --deep --force \
+      codesign --verbose --deep --force \
         --keychain "$KEYCHAIN_PATH" --sign "$CERTIFICATE_NAME" \
         "$APP_BUNDLE"
+      echo "Verifying signature for app bundle ${APP_BUNDLE}..."
+      codesign --verify --verbose --deep --strict=all "$APP_BUNDLE"
     fi
 fi
 
 # Only test the app if it was codesigned, otherwise execution likely fails
-if [ "$CODESIGN" = '1' ]; then
-  echo "Verify Picard executable works and required dependencies are bundled..."
+if [ "$CODESIGN" = '1' ] && [ "$TARGET_ARCH" = 'x86_64' ]; then
+  "$APP_BUNDLE/Contents/MacOS/picard-run" --long-version --no-crash-dialog || echo "Failed running picard-run"
   VERSIONS=$("$APP_BUNDLE/Contents/MacOS/picard-run" --long-version --no-crash-dialog)
   echo "$VERSIONS"
   ASTRCMP_REGEX="astrcmp C"
   [[ $VERSIONS =~ $ASTRCMP_REGEX ]] || (echo "Failed: Build does not include astrcmp C" && false)
   LIBDISCID_REGEX="libdiscid [0-9]+\.[0-9]+\.[0-9]+"
   [[ $VERSIONS =~ $LIBDISCID_REGEX ]] || (echo "Failed: Build does not include libdiscid" && false)
-  "$APP_BUNDLE/Contents/MacOS/fpcalc" -version
+  "$APP_BUNDLE/Contents/Frameworks/fpcalc" -version
 fi
 
 echo "Package app bundle into DMG image..."
-if [ -n "$MACOSX_DEPLOYMENT_TARGET" ]; then
-  DMG="MusicBrainz-Picard-${VERSION}-macOS-${MACOSX_DEPLOYMENT_TARGET}.dmg"
-else
-  DMG="MusicBrainz-Picard-${VERSION}.dmg"
-fi
+DMG="MusicBrainz-Picard${VERSION:+-$VERSION}${MACOSX_DEPLOYMENT_TARGET:+-macOS-$MACOSX_DEPLOYMENT_TARGET}${TARGET_ARCH:+-$TARGET_ARCH}.dmg"
 mkdir staging
 mv "$APP_BUNDLE" staging/
 # Offer a link to /Applications for easy installation
@@ -102,13 +99,13 @@ for i in $(seq $ATTEMPTS); do
     hdiutil create -verbose -volname "MusicBrainz Picard $VERSION" \
       -srcfolder staging -ov -format UDBZ "$DMG"
     ret=$?
-    [ $ret -eq 0 ] && break
+    [ "$ret" -eq 0 ] && break
     echo "hdutil failed with exit code $ret ($i/$ATTEMPTS), retrying in $DELAY seconds"
     sleep $DELAY
 done
-if [ $ret -ne 0 ]; then
+if [ "$ret" -ne 0 ]; then
   echo "hdiutil failed too many times, exiting..."
-  exit $ret
+  exit "$ret"
 fi
 set -e
 

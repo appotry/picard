@@ -2,7 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2020 Laurent Monin
+# Copyright (C) 2019-2022 Laurent Monin
+# Copyright (C) 2022 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -24,7 +25,7 @@ PLUGIN_NAME = "Dummy plugin"
 PLUGIN_AUTHOR = "Zas"
 PLUGIN_DESCRIPTION = "Dummy plugin description"
 PLUGIN_VERSION = "1.0"
-PLUGIN_API_VERSIONS = ["2.0"]
+PLUGIN_API_VERSIONS = ["3.0"]
 PLUGIN_LICENSE = 'Dummy plugin license'
 PLUGIN_LICENSE_URL = 'dummy.plugin.url'
 

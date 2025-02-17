@@ -7,14 +7,14 @@
 # Copyright (C) 2008 Gary van der Merwe
 # Copyright (C) 2008 Hendrik van Antwerpen
 # Copyright (C) 2008 ojnkpjg
-# Copyright (C) 2008-2011, 2014, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008-2011, 2014, 2018-2024 Philipp Wolfer
 # Copyright (C) 2009 Nikolai Prokoschenko
 # Copyright (C) 2011-2012 Chad Wilson
 # Copyright (C) 2011-2013, 2019 Michael Wiencek
 # Copyright (C) 2012-2013, 2016-2017 Wieland Hoffmann
 # Copyright (C) 2013, 2018 Calvin Walton
 # Copyright (C) 2013-2015, 2017 Sophist-UK
-# Copyright (C) 2013-2015, 2017-2021 Laurent Monin
+# Copyright (C) 2013-2015, 2017-2024 Laurent Monin
 # Copyright (C) 2016 Suhas
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2017 Antonio Larrosa
@@ -22,6 +22,9 @@
 # Copyright (C) 2019 Joel Lintunen
 # Copyright (C) 2020-2021 Gabriel Ferreira
 # Copyright (C) 2021 Petit Minion
+# Copyright (C) 2022 skelly37
+# Copyright (C) 2024 Giorgio Fontanive
+# Copyright (C) 2024 Rakim Middya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -46,18 +49,19 @@ from collections import (
 from enum import IntEnum
 import traceback
 
-from PyQt5 import (
-    QtCore,
-    QtNetwork,
-)
+from PyQt6 import QtNetwork
 
 from picard import log
 from picard.cluster import Cluster
 from picard.collection import add_release_to_user_collections
 from picard.config import get_config
 from picard.const import VARIOUS_ARTISTS_ID
-from picard.dataobj import DataObject
 from picard.file import File
+from picard.i18n import (
+    N_,
+    gettext as _,
+)
+from picard.item import MetadataItem
 from picard.mbjson import (
     medium_to_metadata,
     release_group_to_metadata,
@@ -69,30 +73,22 @@ from picard.metadata import (
     run_album_metadata_processors,
     run_track_metadata_processors,
 )
-from picard.plugin import (
-    PluginFunctions,
-    PluginPriority,
-)
+from picard.plugin import PluginFunctions
 from picard.script import (
     ScriptError,
     ScriptParser,
-    enabled_tagger_scripts_texts,
+    iter_active_tagging_scripts,
 )
 from picard.track import Track
 from picard.util import (
     find_best_match,
     format_time,
     mbid_validate,
-    process_events_iter,
-)
-from picard.util.imagelist import (
-    add_metadata_images,
-    remove_metadata_images,
-    update_metadata_images,
 )
 from picard.util.textencoding import asciipunct
 
-from picard.ui.item import Item
+
+RECORDING_QUERY_LIMIT = 100
 
 
 def _create_artist_node_dict(source_node):
@@ -106,7 +102,7 @@ def _copy_artist_nodes(source, target_node):
             credit['artist'] = artist_node
 
 
-class AlbumArtist(DataObject):
+class AlbumArtist(MetadataItem):
     def __init__(self, album_artist_id):
         super().__init__(album_artist_id)
 
@@ -118,14 +114,16 @@ class AlbumStatus(IntEnum):
     LOADED = 3
 
 
-class Album(DataObject, Item):
+class ParseResult(IntEnum):
+    PARSED = 0
+    REDIRECT = 1
+    MISSING_TRACK_RELS = 2
 
-    metadata_images_changed = QtCore.pyqtSignal()
+
+class Album(MetadataItem):
 
     def __init__(self, album_id, discid=None):
-        DataObject.__init__(self, album_id)
-        self.metadata = Metadata()
-        self.orig_metadata = Metadata()
+        super().__init__(album_id)
         self.tracks = []
         self.loaded = False
         self.load_task = None
@@ -134,6 +132,7 @@ class Album(DataObject, Item):
         self._requests = 0
         self._tracks_loaded = False
         self._discids = set()
+        self._recordings_map = {}
         if discid:
             self._discids.add(discid)
         self._after_load_callbacks = []
@@ -141,10 +140,10 @@ class Album(DataObject, Item):
         self.unmatched_files.metadata_images_changed.connect(self.update_metadata_images)
         self.status = AlbumStatus.NONE
         self._album_artists = []
-        self.update_metadata_images_enabled = True
+        self.update_children_metadata_attrs = {'metadata', 'orig_metadata'}
 
     def __repr__(self):
-        return '<Album %s %r>' % (self.id, self.metadata["album"])
+        return '<Album %s %r>' % (self.id, self.metadata['album'])
 
     def iterfiles(self, save=False):
         for track in self.tracks:
@@ -152,8 +151,8 @@ class Album(DataObject, Item):
         if not save:
             yield from self.unmatched_files.iterfiles()
 
-    def enable_update_metadata_images(self, enabled):
-        self.update_metadata_images_enabled = enabled
+    def iter_correctly_matched_tracks(self):
+        yield from (track for track in self.tracks if track.num_linked_files == 1)
 
     def append_album_artist(self, album_artist_id):
         """Append artist id to the list of album artists
@@ -187,8 +186,14 @@ class Album(DataObject, Item):
         """Returns the list of album artists (as AlbumArtist objects)"""
         return self._album_artists
 
+    def _run_album_metadata_processors(self):
+        try:
+            run_album_metadata_processors(self, self._new_metadata, self._release_node)
+        except BaseException:
+            self.error_append(traceback.format_exc())
+
     def _parse_release(self, release_node):
-        log.debug("Loading release %r ...", self.id)
+        log.debug("Loading release %r …", self.id)
         self._tracks_loaded = False
         release_id = release_node['id']
         if release_id != self.id:
@@ -199,12 +204,13 @@ class Album(DataObject, Item):
                 album.match_files(self.unmatched_files.files)
                 album.update()
                 self.tagger.remove_album(self)
-                return False
+                return ParseResult.REDIRECT
             else:
                 del self.tagger.albums[self.id]
                 self.tagger.albums[release_id] = self
                 self.id = release_id
 
+        self._release_node = release_node
         # Make the release artist nodes available, since they may
         # contain supplementary data (aliases, tags, genres, ratings)
         # which aren't present in the release group, track, or
@@ -242,32 +248,37 @@ class Album(DataObject, Item):
         # Add album to collections
         add_release_to_user_collections(release_node)
 
-        # Run album metadata plugins
-        try:
-            run_album_metadata_processors(self, m, release_node)
-        except BaseException:
-            self.error_append(traceback.format_exc())
+        if config.setting['track_ars']:
+            # Detect if track relationships did not get loaded
+            try:
+                for medium_node in release_node['media']:
+                    if medium_node['track-count']:
+                        if 'relations' in medium_node['tracks'][0]['recording']:
+                            return ParseResult.PARSED
+                        else:
+                            return ParseResult.MISSING_TRACK_RELS
+            except KeyError:
+                pass
 
-        self._release_node = release_node
-        return True
+        return ParseResult.PARSED
 
     def _release_request_finished(self, document, http, error):
         if self.load_task is None:
             return
         self.load_task = None
-        parsed = False
+        parse_result = None
         try:
             if error:
                 self.error_append(http.errorString())
                 # Fix for broken NAT releases
-                if error == QtNetwork.QNetworkReply.ContentNotFoundError:
+                if error == QtNetwork.QNetworkReply.NetworkError.ContentNotFoundError:
                     config = get_config()
                     nats = False
-                    nat_name = config.setting["nat_name"]
+                    nat_name = config.setting['nat_name']
                     files = list(self.unmatched_files.files)
                     for file in files:
-                        recordingid = file.metadata["musicbrainz_recordingid"]
-                        if mbid_validate(recordingid) and file.metadata["album"] == nat_name:
+                        recordingid = file.metadata['musicbrainz_recordingid']
+                        if mbid_validate(recordingid) and file.metadata['album'] == nat_name:
                             nats = True
                             self.tagger.move_file_to_nat(file, recordingid)
                             self.tagger.nats.update()
@@ -276,156 +287,84 @@ class Album(DataObject, Item):
                         error = False
             else:
                 try:
-                    parsed = self._parse_release(document)
+                    parse_result = self._parse_release(document)
+                    config = get_config()
+                    if parse_result == ParseResult.MISSING_TRACK_RELS:
+                        log.debug("Recording relationships not loaded in initial request for %r, issuing separate requests", self)
+                        self._request_recording_relationships()
+                    elif parse_result == ParseResult.PARSED:
+                        self._run_album_metadata_processors()
+                    elif parse_result == ParseResult.REDIRECT:
+                        error = False
                 except Exception:
                     error = True
                     self.error_append(traceback.format_exc())
         finally:
             self._requests -= 1
-            if parsed or error:
+            if parse_result == ParseResult.PARSED or error:
                 self._finalize_loading(error)
 
-    def _finalize_loading(self, error):
+    def _request_recording_relationships(self, offset=0, limit=RECORDING_QUERY_LIMIT):
+        inc = (
+            'artist-rels',
+            'recording-rels',
+            'release-rels',
+            'url-rels',
+            'work-rels',
+            'work-level-rels',
+        )
+        log.debug("Loading recording relationships for %r (offset=%i, limit=%i)", self, offset, limit)
+        self._requests += 1
+        self.load_task = self.tagger.mb_api.browse_recordings(
+            self._recordings_request_finished,
+            inc=inc,
+            release=self.id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def _recordings_request_finished(self, document, http, error):
         if error:
-            self.metadata.clear()
-            self.status = AlbumStatus.ERROR
-            del self._new_metadata
-            del self._new_tracks
-            self.update()
-            if not self._requests:
-                self.loaded = True
-                for func, always in self._after_load_callbacks:
-                    if always:
-                        func()
-            return
+            self.error_append(http.errorString())
+            self._requests -= 1
+            self._finalize_loading(error)
+        else:
+            for recording in document.get('recordings', []):
+                recording_id = recording.get('id')
+                if recording_id:
+                    self._recordings_map[recording_id] = recording
+            count = document.get('recording-count', 0)
+            offset = document.get('recording-offset', 0)
+            next_offset = offset + RECORDING_QUERY_LIMIT
+            if next_offset < count:
+                self._requests -= 1
+                self._request_recording_relationships(offset=next_offset)
+            else:
+                # Merge separately loaded recording relationships into release node
+                self._merge_release_recording_relationships()
+                self._run_album_metadata_processors()
+                self._requests -= 1
+                self._finalize_loading(error)
 
-        if self._requests > 0:
-            return
+    def _merge_recording_relationships(self, track_node):
+        if 'relations' not in track_node['recording']:
+            recording = self._recordings_map.get(track_node['recording']['id'])
+            if recording:
+                track_node['recording']['relations'] = recording.get('relations', [])
 
-        if not self._tracks_loaded:
-            artists = set()
-            all_media = []
-            absolutetracknumber = 0
+    def _merge_release_recording_relationships(self):
+        for medium_node in self._release_node['media']:
+            pregap_node = medium_node.get('pregap')
+            if pregap_node:
+                self._merge_recording_relationships(pregap_node)
 
-            va = self._new_metadata['musicbrainz_albumartistid'] == VARIOUS_ARTISTS_ID
+            for track_node in medium_node.get('tracks', []):
+                self._merge_recording_relationships(track_node)
 
-            djmix_ars = {}
-            if hasattr(self._new_metadata, "_djmix_ars"):
-                djmix_ars = self._new_metadata._djmix_ars
+            for track_node in medium_node.get('data-tracks', []):
+                self._merge_recording_relationships(track_node)
 
-            for medium_node in self._release_node['media']:
-                mm = Metadata()
-                mm.copy(self._new_metadata)
-                medium_to_metadata(medium_node, mm)
-                format = medium_node.get('format')
-                if format:
-                    all_media.append(format)
-
-                for dj in djmix_ars.get(mm["discnumber"], []):
-                    mm.add("djmixer", dj)
-
-                if va:
-                    mm["compilation"] = "1"
-                else:
-                    del mm["compilation"]
-
-                if 'discs' in medium_node:
-                    discids = [disc.get('id') for disc in medium_node['discs']]
-                    mm['~musicbrainz_discids'] = discids
-                    mm['musicbrainz_discid'] = list(self._discids.intersection(discids))
-
-                if "pregap" in medium_node:
-                    absolutetracknumber += 1
-                    mm['~discpregap'] = '1'
-                    extra_metadata = {
-                        '~pregap': '1',
-                        '~absolutetracknumber': absolutetracknumber,
-                    }
-                    self._finalize_loading_track(medium_node['pregap'], mm, artists, extra_metadata)
-
-                track_count = medium_node['track-count']
-                if track_count:
-                    tracklist_node = medium_node['tracks']
-                    for track_node in tracklist_node:
-                        absolutetracknumber += 1
-                        extra_metadata = {
-                            '~absolutetracknumber': absolutetracknumber,
-                        }
-                        self._finalize_loading_track(track_node, mm, artists, extra_metadata)
-
-                if "data-tracks" in medium_node:
-                    for track_node in medium_node['data-tracks']:
-                        absolutetracknumber += 1
-                        extra_metadata = {
-                            '~datatrack': '1',
-                            '~absolutetracknumber': absolutetracknumber,
-                        }
-                        self._finalize_loading_track(track_node, mm, artists, extra_metadata)
-
-            totalalbumtracks = absolutetracknumber
-            self._new_metadata['~totalalbumtracks'] = totalalbumtracks
-            # Generate a list of unique media, but keep order of first appearance
-            self._new_metadata['media'] = " / ".join(list(OrderedDict.fromkeys(all_media)))
-
-            for track in self._new_tracks:
-                track.metadata["~totalalbumtracks"] = totalalbumtracks
-                if len(artists) > 1:
-                    track.metadata["~multiartist"] = "1"
-            del self._release_node
-            del self._release_artist_nodes
-            self._tracks_loaded = True
-
-        if not self._requests:
-            self.enable_update_metadata_images(False)
-            for track in self._new_tracks:
-                track.orig_metadata.copy(track.metadata)
-                track.metadata_images_changed.connect(self.update_metadata_images)
-
-            # Prepare parser for user's script
-            for s_name, s_text in enabled_tagger_scripts_texts():
-                parser = ScriptParser()
-                for track in self._new_tracks:
-                    # Run tagger script for each track
-                    try:
-                        parser.eval(s_text, track.metadata)
-                    except ScriptError:
-                        log.exception("Failed to run tagger script %s on track", s_name)
-                    track.metadata.strip_whitespace()
-                    track.scripted_metadata.update(track.metadata)
-                # Run tagger script for the album itself
-                try:
-                    parser.eval(s_text, self._new_metadata)
-                except ScriptError:
-                    log.exception("Failed to run tagger script %s on album", s_name)
-                self._new_metadata.strip_whitespace()
-
-            unmatched_files = [file for track in self.tracks for file in track.files]
-            self.metadata = self._new_metadata
-            self.orig_metadata.copy(self.metadata)
-            self.orig_metadata.images.clear()
-            self.tracks = self._new_tracks
-            del self._new_metadata
-            del self._new_tracks
-            self.loaded = True
-            self.status = AlbumStatus.LOADED
-            self.match_files(unmatched_files + self.unmatched_files.files)
-            self.enable_update_metadata_images(True)
-            self.update_metadata_images()
-            self.update()
-            self.tagger.window.set_statusbar_message(
-                N_('Album %(id)s loaded: %(artist)s - %(album)s'),
-                {
-                    'id': self.id,
-                    'artist': self.metadata['albumartist'],
-                    'album': self.metadata['album']
-                },
-                timeout=3000
-            )
-            for func, always in self._after_load_callbacks:
-                func()
-            self._after_load_callbacks = []
-            if self.item.isSelected():
-                self.tagger.window.refresh_metadatabox()
+        self._recordings_map = {}
 
     def _finalize_loading_track(self, track_node, metadata, artists, extra_metadata=None):
         # As noted in `_parse_release` above, the release artist nodes
@@ -447,7 +386,7 @@ class Album(DataObject, Item):
         track._customize_metadata()
 
         self._new_metadata.length += tm.length
-        artists.add(tm["artist"])
+        artists.add(tm['artist'])
         if extra_metadata:
             tm.update(extra_metadata)
 
@@ -459,12 +398,164 @@ class Album(DataObject, Item):
 
         return track
 
+    def _load_tracks(self):
+        artists = set()
+        all_media = []
+        absolutetracknumber = 0
+
+        def _load_track(node, mm, artists, extra_metadata):
+            nonlocal absolutetracknumber
+            absolutetracknumber += 1
+            extra_metadata['~absolutetracknumber'] = absolutetracknumber
+            self._finalize_loading_track(node, mm, artists, extra_metadata)
+
+        va = self._new_metadata['musicbrainz_albumartistid'] == VARIOUS_ARTISTS_ID
+
+        djmix_ars = {}
+        if hasattr(self._new_metadata, '_djmix_ars'):
+            djmix_ars = self._new_metadata._djmix_ars
+
+        for medium_node in self._release_node['media']:
+            mm = Metadata()
+            mm.copy(self._new_metadata)
+            medium_to_metadata(medium_node, mm)
+            fmt = medium_node.get('format')
+            if fmt:
+                all_media.append(fmt)
+
+            for dj in djmix_ars.get(mm['discnumber'], []):
+                mm.add('djmixer', dj)
+
+            if va:
+                mm['compilation'] = '1'
+            else:
+                del mm['compilation']
+
+            if 'discs' in medium_node:
+                discids = [disc.get('id') for disc in medium_node['discs']]
+                mm['~musicbrainz_discids'] = discids
+                mm['musicbrainz_discid'] = list(self._discids.intersection(discids))
+
+            pregap_node = medium_node.get('pregap')
+            if pregap_node:
+                mm['~discpregap'] = '1'
+                _load_track(pregap_node, mm, artists, {'~pregap': '1'})
+
+            for track_node in medium_node.get('tracks', []):
+                _load_track(track_node, mm, artists, {})
+
+            for track_node in medium_node.get('data-tracks', []):
+                _load_track(track_node, mm, artists, {'~datatrack': '1'})
+
+        totalalbumtracks = absolutetracknumber
+        self._new_metadata['~totalalbumtracks'] = totalalbumtracks
+        # Generate a list of unique media, but keep order of first appearance
+        self._new_metadata['media'] = " / ".join(list(OrderedDict.fromkeys(all_media)))
+
+        multiartists = len(artists) > 1
+        for track in self._new_tracks:
+            track.metadata['~totalalbumtracks'] = totalalbumtracks
+            if multiartists:
+                track.metadata['~multiartist'] = '1'
+        del self._release_node
+        del self._release_artist_nodes
+        self._tracks_loaded = True
+
+    def _finalize_loading_album(self):
+        with self.suspend_metadata_images_update:
+            for track in self._new_tracks:
+                track.orig_metadata.copy(track.metadata)
+                track.metadata_images_changed.connect(self.update_metadata_images)
+
+            # Prepare parser for user's script
+            for script in iter_active_tagging_scripts():
+                parser = ScriptParser()
+                for track in self._new_tracks:
+                    # Run tagger script for each track
+                    try:
+                        parser.eval(script.content, track.metadata)
+                    except ScriptError:
+                        log.exception("Failed to run tagger script %s on track", script.name)
+                    track.metadata.strip_whitespace()
+                    track.scripted_metadata.update(track.metadata)
+                # Run tagger script for the album itself
+                try:
+                    parser.eval(script.content, self._new_metadata)
+                except ScriptError:
+                    log.exception("Failed to run tagger script %s on album", script.name)
+                self._new_metadata.strip_whitespace()
+
+            unmatched_files = [file for track in self.tracks for file in track.files]
+            self.metadata = self._new_metadata
+            self.orig_metadata.copy(self.metadata)
+            self.orig_metadata.images.clear()
+            self.tracks = self._new_tracks
+            del self._new_metadata
+            del self._new_tracks
+            self.loaded = True
+            self.status = AlbumStatus.LOADED
+            self.match_files(unmatched_files + self.unmatched_files.files)
+        self.update_metadata_images()
+        self.update()
+        self.tagger.window.set_statusbar_message(
+            N_('Album %(id)s loaded: %(artist)s - %(album)s'),
+            {
+                'id': self.id,
+                'artist': self.metadata['albumartist'],
+                'album': self.metadata['album']
+            },
+            timeout=3000
+        )
+        for func, always in self._after_load_callbacks:
+            func()
+        self._after_load_callbacks = []
+        if self.ui_item.isSelected():
+            self.tagger.window.refresh_metadatabox()
+            self.tagger.window.cover_art_box.update_metadata()
+
+    def _finalize_loading(self, error):
+        if self.loaded:
+            # This is not supposed to happen, _finalize_loading should only
+            # be called once after all requests finished.
+            import inspect
+            stack = inspect.stack()
+            args = [self]
+            msg = "Album._finalize_loading called for already loaded album %r"
+            if len(stack) > 1:
+                f = stack[1]
+                msg += " at %s:%d in %s"
+                args.extend((f.filename, f.lineno, f.function))
+            log.warning(msg, *args)
+            return
+
+        if error:
+            self.metadata.clear()
+            self.status = AlbumStatus.ERROR
+            self.update()
+            if not self._requests:
+                del self._new_metadata
+                del self._new_tracks
+                self.loaded = True
+                for func, always in self._after_load_callbacks:
+                    if always:
+                        func()
+            return
+
+        if self._requests > 0:
+            return
+
+        if not self._tracks_loaded:
+            self._load_tracks()
+
+        if not self._requests:
+            self._finalize_loading_album()
+
     def load(self, priority=False, refresh=False):
         if self._requests:
             log.info("Not reloading, some requests are still active.")
             return
         self.tagger.window.set_statusbar_message(
-            N_('Loading album %(id)s ...'),
+            N_("Loading album %(id)s …"),
             {'id': self.id}
         )
         self.loaded = False
@@ -481,22 +572,50 @@ class Album(DataObject, Item):
         self.clear_errors()
         config = get_config()
         require_authentication = False
-        inc = ['release-groups', 'media', 'discids', 'recordings', 'artist-credits',
-               'artists', 'aliases', 'labels', 'isrcs', 'collections', 'annotation']
+        inc = {
+            'aliases',
+            'annotation',
+            'artist-credits',
+            'artists',
+            'collections',
+            'discids',
+            'isrcs',
+            'labels',
+            'media',
+            'recordings',
+            'release-groups',
+        }
         if self.tagger.webservice.oauth_manager.is_authorized():
             require_authentication = True
-            inc += ['user-collections']
+            inc |= {'user-collections'}
         if config.setting['release_ars'] or config.setting['track_ars']:
-            inc += ['artist-rels', 'release-rels', 'url-rels', 'recording-rels', 'work-rels']
+            inc |= {
+                'artist-rels',
+                'recording-rels',
+                'release-group-level-rels',
+                'release-rels',
+                'series-rels',
+                'url-rels',
+                'work-rels',
+            }
             if config.setting['track_ars']:
-                inc += ['recording-level-rels', 'work-level-rels']
-        require_authentication = self.set_genre_inc_params(inc) or require_authentication
+                inc |= {
+                    'recording-level-rels',
+                    'work-level-rels',
+                }
+        require_authentication = self.set_genre_inc_params(inc, config) or require_authentication
         if config.setting['enable_ratings']:
             require_authentication = True
-            inc += ['user-ratings']
+            inc |= {'user-ratings'}
+
         self.load_task = self.tagger.mb_api.get_release_by_id(
-            self.id, self._release_request_finished, inc=inc,
-            mblogin=require_authentication, priority=priority, refresh=refresh)
+            self.id,
+            self._release_request_finished,
+            inc=inc,
+            mblogin=require_authentication,
+            priority=priority,
+            refresh=refresh
+        )
 
     def run_when_loaded(self, func, always=False):
         if self.loaded:
@@ -510,43 +629,39 @@ class Album(DataObject, Item):
             self.load_task = None
 
     def update(self, update_tracks=True, update_selection=True):
-        if self.item:
-            self.item.update(update_tracks, update_selection=update_selection)
+        if self.ui_item:
+            self.ui_item.update(update_tracks, update_selection=update_selection)
 
     def add_file(self, track, file, new_album=True):
         self._files_count += 1
         if new_album:
             self.update(update_tracks=False)
-            add_metadata_images(self, [file])
+            self.add_metadata_images_from_children([file])
 
     def remove_file(self, track, file, new_album=True):
         self._files_count -= 1
         if new_album:
             self.update(update_tracks=False)
-            remove_metadata_images(self, [file])
+            self.remove_metadata_images_from_children([file])
 
     @staticmethod
-    def _match_files(files, tracks, unmatched_files, threshold=0, use_events_iter=False):
+    def _match_files(files, tracks, unmatched_files, threshold=0):
         """Match files to tracks on this album, based on metadata similarity or recordingid."""
-        if use_events_iter:
-            #  TODO: get rid of this completely at some point
-            events_iter = process_events_iter
-        else:
-            def _events_iter(seq):
-                return seq
-            events_iter = _events_iter
-
         tracks_cache = defaultdict(lambda: None)
 
         def build_tracks_cache():
             for track in tracks:
                 tm_recordingid = track.orig_metadata['musicbrainz_recordingid']
+                tm_trackid = track.orig_metadata['musicbrainz_trackid']
                 tm_tracknumber = track.orig_metadata['tracknumber']
                 tm_discnumber = track.orig_metadata['discnumber']
                 for tup in (
                     (tm_recordingid, tm_tracknumber, tm_discnumber),
                     (tm_recordingid, tm_tracknumber),
-                    (tm_recordingid, )):
+                    (tm_recordingid, ),
+                    (tm_trackid, tm_tracknumber, tm_discnumber),
+                    (tm_trackid, tm_tracknumber),
+                    (tm_trackid, )):
                     tracks_cache[tup] = track
 
         SimMatchAlbum = namedtuple('SimMatchAlbum', 'similarity track')
@@ -555,29 +670,39 @@ class Album(DataObject, Item):
         for file in list(files):
             if file.state == File.REMOVED:
                 continue
-            # if we have a recordingid to match against, use that in priority
+            # if we have a recordingid or trackid to match against, use that in priority
+            # if recordingid and trackid do point to different tracks, compare the file
+            # and track durations to find the better match.
             recid = file.match_recordingid or file.metadata['musicbrainz_recordingid']
-            if recid and mbid_validate(recid):
-                if not tracks_cache:
-                    build_tracks_cache()
-                tracknumber = file.metadata['tracknumber']
-                discnumber = file.metadata['discnumber']
-                track = (tracks_cache[(recid, tracknumber, discnumber)]
-                         or tracks_cache[(recid, tracknumber)]
-                         or tracks_cache[(recid, )])
-                if track:
-                    yield (file, track)
-                    continue
+            trackid = file.metadata['musicbrainz_trackid']
+            tracknumber = file.metadata['tracknumber']
+            discnumber = file.metadata['discnumber']
+
+            def mbid_candidates():
+                for mbid in (recid, trackid):
+                    if mbid and mbid_validate(mbid):
+                        if not tracks_cache:
+                            build_tracks_cache()
+                        track = (tracks_cache[(mbid, tracknumber, discnumber)]
+                                or tracks_cache[(mbid, tracknumber)]
+                                or tracks_cache[(mbid, )])
+                        if track:
+                            similarity = track.metadata.length_score(track.metadata.length, file.metadata.length)
+                            yield SimMatchAlbum(similarity=similarity, track=track)
+
+            best_match = find_best_match(mbid_candidates(), no_match)
+            if best_match.result != no_match:
+                yield (file, best_match.result.track)
+                continue
 
             # try to match by similarity
-            def candidates():
-                for track in events_iter(tracks):
+            def similarity_candidates():
+                for track in tracks:
                     similarity = track.metadata.compare(file.orig_metadata)
                     if similarity >= threshold:
                         yield SimMatchAlbum(similarity=similarity, track=track)
 
-            best_match = find_best_match(candidates, no_match)
-
+            best_match = find_best_match(similarity_candidates(), no_match)
             yield (file, best_match.result.track)
 
     def match_files(self, files):
@@ -586,36 +711,43 @@ class Album(DataObject, Item):
             config = get_config()
             threshold = config.setting['track_matching_threshold']
             moves = self._match_files(files, self.tracks, self.unmatched_files, threshold=threshold)
-            for file, target in moves:
-                file.move(target)
+            with self.tagger.window.metadata_box.ignore_updates:
+                for file, target in moves:
+                    file.move(target)
         else:
-            for file in list(files):
-                file.move(self.unmatched_files)
+            with self.tagger.window.metadata_box.ignore_updates:
+                for file in list(files):
+                    file.move(self.unmatched_files)
 
+    @property
     def can_save(self):
         return self._files_count > 0
 
+    @property
     def can_remove(self):
         return True
 
+    @property
     def can_edit_tags(self):
         return True
 
+    @property
     def can_analyze(self):
         return False
 
+    @property
     def can_autotag(self):
         return False
 
+    @property
     def can_refresh(self):
         return True
 
+    @property
     def can_view_info(self):
-        return self.loaded or self.errors
+        return self.loaded or bool(self.errors)
 
-    def can_extract(self):
-        return any(track.can_extract() for track in self.tracks)
-
+    @property
     def is_album_like(self):
         return True
 
@@ -683,6 +815,8 @@ class Album(DataObject, Item):
             return self.metadata['totaldiscs']
         elif column == 'covercount':
             return self.cover_art_description()
+        elif column == 'coverdimensions':
+            return self.cover_art_dimensions()
         else:
             return self.metadata[column]
 
@@ -704,66 +838,64 @@ class Album(DataObject, Item):
             self.load(priority=True, refresh=True)
 
     def update_metadata_images(self):
-        if not self.update_metadata_images_enabled:
+        if self.suspend_metadata_images_update:
             return
 
-        if update_metadata_images(self):
-            self.update(False)
+        if self.update_metadata_images_from_children():
+            self.update(update_tracks=False)
             self.metadata_images_changed.emit()
 
     def keep_original_images(self):
-        self.enable_update_metadata_images(False)
+        with self.suspend_metadata_images_update:
+            for track in self.tracks:
+                track.keep_original_images()
+            for file in list(self.unmatched_files.files):
+                file.keep_original_images()
+
+    def children_metadata_items(self):
         for track in self.tracks:
-            track.keep_original_images()
-        for file in list(self.unmatched_files.files):
-            file.keep_original_images()
-        self.enable_update_metadata_images(True)
-        self.update_metadata_images()
+            yield track
+            yield from track.files
+        yield from self.unmatched_files.files
 
 
 class NatAlbum(Album):
 
     def __init__(self):
-        super().__init__("NATS")
+        super().__init__('NATS')
         self.loaded = True
         self.update()
 
     def update(self, update_tracks=True, update_selection=True):
         config = get_config()
-        self.enable_update_metadata_images(False)
-        old_album_title = self.metadata["album"]
-        self.metadata["album"] = config.setting["nat_name"]
-        for track in self.tracks:
-            if old_album_title == track.metadata["album"]:
-                track.metadata["album"] = self.metadata["album"]
-            for file in track.files:
-                track.update_file_metadata(file)
-        self.enable_update_metadata_images(True)
-        super().update(update_tracks, update_selection)
+        old_album_title = self.metadata['album']
+        self.metadata['album'] = config.setting['nat_name']
+        with self.suspend_metadata_images_update:
+            for track in self.tracks:
+                if old_album_title == track.metadata['album']:
+                    track.metadata['album'] = self.metadata['album']
+                for file in track.files:
+                    track.update_file_metadata(file)
+        super().update(update_tracks=update_tracks, update_selection=update_selection)
 
     def _finalize_loading(self, error):
         self.update()
 
+    @property
     def can_refresh(self):
         return False
 
+    @property
     def can_browser_lookup(self):
         return False
 
+    @property
+    def can_view_info(self):
+        return False
 
-_album_post_removal_processors = PluginFunctions(label='album_post_removal_processors')
 
-
-def register_album_post_removal_processor(function, priority=PluginPriority.NORMAL):
-    """Registers an album-removed processor.
-    Args:
-        function: function to call after album removal, it will be passed the album object
-        priority: optional, PluginPriority.NORMAL by default
-    Returns:
-        None
-    """
-    _album_post_removal_processors.register(function.__module__, function, priority)
+album_post_removal_processors = PluginFunctions(label='album_post_removal_processors')
 
 
 def run_album_post_removal_processors(album_object):
-    _album_post_removal_processors.run(album_object)
+    album_post_removal_processors.run(album_object)

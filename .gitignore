@@ -7,6 +7,7 @@
 # virtualenv
 .venv
 venv/
+.python-version
 
 # OS generated files
 .DS_Store
@@ -22,6 +23,7 @@ Thumbs.db:encryptable
 *.pyc
 *.pyd
 *.so
+*.mo
 appxmanifest.xml
 build/
 coverage.xml
@@ -30,6 +32,7 @@ installer/picard-setup.nsi
 installer/i18n/out/*.nsh
 locale/
 org.musicbrainz.Picard.appdata.xml
+org.musicbrainz.Picard.desktop
 picard.egg-info
 po/attributes/attributes.pot
 po/countries/countries.pot
@@ -42,3 +45,4 @@ win-version-info.txt
 *~
 appledev.p12
 build.cfg
+.weblate.ini

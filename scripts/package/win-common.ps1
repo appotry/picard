@@ -1,43 +1,36 @@
 # Common functions for Windows packaging scripts
 
 Param(
-  [System.Security.Cryptography.X509Certificates.X509Certificate]
-  $Certificate
+  [ValidateScript({ (Test-Path $_ -PathType Leaf) -or (-not $_) })]
+  [String]
+  $CertificateFile,
+  [SecureString]
+  $CertificatePassword
 )
 
-Function CodeSignBinary {
+Function DownloadFile {
   Param(
-    [ValidateScript({Test-Path $_ -PathType Leaf})]
+    [Parameter(Mandatory = $true)]
     [String]
-    $BinaryPath
+    $FileName,
+    [Parameter(Mandatory = $true)]
+    [String]
+    $Url
   )
-  If ($Certificate) {
-    Set-AuthenticodeSignature -FilePath $BinaryPath -Certificate $Certificate `
-      -ErrorAction Stop
-  } Else {
-    Write-Output "Skip signing $BinaryPath"
-  }
+  $OutputPath = (Join-Path (Resolve-Path .) $FileName)
+  (New-Object System.Net.WebClient).DownloadFile($Url, "$OutputPath")
 }
 
-Function ThrowOnExeError {
-  Param( [String]$Message )
-  If ($LastExitCode -ne 0) {
-    Throw $Message
-  }
-}
-
-Function FinalizePackage {
+Function VerifyHash {
   Param(
-    [ValidateScript({Test-Path $_ -PathType Container})]
+    [Parameter(Mandatory = $true)]
     [String]
-    $Path
+    $FileName,
+    [Parameter(Mandatory = $true)]
+    [String]
+    $Sha256Sum
   )
-
-  CodeSignBinary (Join-Path $Path picard.exe)
-  CodeSignBinary (Join-Path $Path fpcalc.exe)
-  CodeSignBinary (Join-Path $Path discid.dll)
-
-  # Delete unused files
-  Remove-Item -Path (Join-Path $Path libcrypto-1_1.dll)
-  Remove-Item -Path (Join-Path $Path libssl-1_1.dll)
+  If ((Get-FileHash "$FileName").hash -ne "$Sha256Sum") {
+    Throw "Invalid SHA256 hash for $FileName"
+  }
 }

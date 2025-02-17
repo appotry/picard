@@ -3,9 +3,9 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2008 Lukáš Lalinský
-# Copyright (C) 2018, 2020-2021 Philipp Wolfer
+# Copyright (C) 2018, 2020-2023, 2025 Philipp Wolfer
 # Copyright (C) 2019 Wieland Hoffmann
-# Copyright (C) 2019-2021 Laurent Monin
+# Copyright (C) 2019-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,25 +22,22 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import (
     QTextBlockFormat,
     QTextCursor,
 )
 
-from picard.config import (
-    BoolOption,
-    IntOption,
-    TextOption,
-    get_config,
+from picard.config import get_config
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import (
+    N_,
+    gettext as _,
 )
 from picard.track import TagGenreFilter
 
-from picard.ui.options import (
-    OptionsPage,
-    register_options_page,
-)
-from picard.ui.ui_options_genres import Ui_GenresOptionsPage
+from picard.ui.forms.ui_options_genres import Ui_GenresOptionsPage
+from picard.ui.options import OptionsPage
 
 
 TOOLTIP_GENRES_FILTER = N_("""<html><head/><body>
@@ -83,26 +80,26 @@ Green background means the tag will be kept.
 
 class GenresOptionsPage(OptionsPage):
 
-    NAME = "genres"
+    NAME = 'genres'
     TITLE = N_("Genres")
-    PARENT = "metadata"
+    PARENT = 'metadata'
     SORT_ORDER = 20
     ACTIVE = True
-    HELP_URL = '/config/options_genres.html'
+    HELP_URL = "/config/options_genres.html"
 
-    options = [
-        BoolOption("setting", "use_genres", False),
-        IntOption("setting", "max_genres", 5),
-        IntOption("setting", "min_genre_usage", 90),
-        TextOption("setting", "genres_filter", "-seen live\n-favorites\n-fixme\n-owned"),
-        TextOption("setting", "join_genres", ""),
-        BoolOption("setting", "only_my_genres", False),
-        BoolOption("setting", "artists_genres", False),
-        BoolOption("setting", "folksonomy_tags", False),
-    ]
+    OPTIONS = (
+        ('use_genres', None),
+        ('only_my_genres', ['only_my_genres']),
+        ('artists_genres', ['artists_genres']),
+        ('folksonomy_tags', ['folksonomy_tags']),
+        ('min_genre_usage', ['min_genre_usage']),
+        ('max_genres', ['max_genres']),
+        ('join_genres', ['join_genres']),
+        ('genres_filter', ['genres_filter']),
+    )
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = Ui_GenresOptionsPage()
         self.ui.setupUi(self)
 
@@ -114,17 +111,17 @@ class GenresOptionsPage(OptionsPage):
 
         # FIXME: colors aren't great from accessibility POV
         self.fmt_keep = QTextBlockFormat()
-        self.fmt_keep.setBackground(Qt.green)
+        self.fmt_keep.setBackground(Qt.GlobalColor.green)
 
         self.fmt_skip = QTextBlockFormat()
-        self.fmt_skip.setBackground(Qt.red)
+        self.fmt_skip.setBackground(Qt.GlobalColor.red)
 
         self.fmt_clear = QTextBlockFormat()
         self.fmt_clear.clearBackground()
 
     def load(self):
         config = get_config()
-        self.ui.use_genres.setChecked(config.setting["use_genres"])
+        self.ui.use_genres.setChecked(config.setting['use_genres'])
         self.ui.max_genres.setValue(config.setting["max_genres"])
         self.ui.min_genre_usage.setValue(config.setting["min_genre_usage"])
         self.ui.join_genres.setEditText(config.setting["join_genres"])
@@ -135,14 +132,14 @@ class GenresOptionsPage(OptionsPage):
 
     def save(self):
         config = get_config()
-        config.setting["use_genres"] = self.ui.use_genres.isChecked()
-        config.setting["max_genres"] = self.ui.max_genres.value()
-        config.setting["min_genre_usage"] = self.ui.min_genre_usage.value()
-        config.setting["join_genres"] = self.ui.join_genres.currentText()
-        config.setting["genres_filter"] = self.ui.genres_filter.toPlainText()
-        config.setting["only_my_genres"] = self.ui.only_my_genres.isChecked()
-        config.setting["artists_genres"] = self.ui.artists_genres.isChecked()
-        config.setting["folksonomy_tags"] = self.ui.folksonomy_tags.isChecked()
+        config.setting['use_genres'] = self.ui.use_genres.isChecked()
+        config.setting['max_genres'] = self.ui.max_genres.value()
+        config.setting['min_genre_usage'] = self.ui.min_genre_usage.value()
+        config.setting['join_genres'] = self.ui.join_genres.currentText()
+        config.setting['genres_filter'] = self.ui.genres_filter.toPlainText()
+        config.setting['only_my_genres'] = self.ui.only_my_genres.isChecked()
+        config.setting['artists_genres'] = self.ui.artists_genres.isChecked()
+        config.setting['folksonomy_tags'] = self.ui.folksonomy_tags.isChecked()
 
     def update_test_genres_filter(self):
         test_text = self.ui.test_genres_filter.toPlainText()
@@ -152,9 +149,7 @@ class GenresOptionsPage(OptionsPage):
 
         # FIXME: very simple error reporting, improve
         self.ui.label_test_genres_filter_error.setText(
-            "\n".join(
-                [_("Error line %d: %s") % (lineno + 1, error) for lineno, error in tagfilter.errors.items()]
-            )
+            "\n".join(tagfilter.format_errors())
         )
 
         def set_line_fmt(lineno, textformat):

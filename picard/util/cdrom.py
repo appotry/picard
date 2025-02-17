@@ -9,10 +9,11 @@
 # Copyright (C) 2009 david
 # Copyright (C) 2013 Johannes Dewender
 # Copyright (C) 2013 Sebastian Ramacher
-# Copyright (C) 2013, 2018-2021 Laurent Monin
+# Copyright (C) 2013, 2018-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2013-2014 Michael Wiencek
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2017 Sophist-UK
+# Copyright (C) 2022 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,6 +28,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
 
 import os.path
 
@@ -47,20 +49,24 @@ except ImportError:
         discid = None
 
 
-DEFAULT_DRIVES = []
-if discid is not None:
-    device = discid.get_default_device()
-    if device:
-        DEFAULT_DRIVES.append(device)
-
+DISCID_NOT_LOADED_MESSAGE = "CDROM: discid library not found - Lookup CD functionality disabled"
 LINUX_CDROM_INFO = '/proc/sys/dev/cdrom/info'
+
+
+def get_default_cdrom_drives():
+    default_drives = []
+    if discid is not None:
+        device = discid.get_default_device()
+        if device:
+            default_drives.append(device)
+    return default_drives
 
 
 def _generic_iter_drives():
     config = get_config()
     yield from (
         device.strip() for device
-        in config.setting["cd_lookup_device"].split(",")
+        in config.setting['cd_lookup_device'].split(',')
         if device and not device.isspace()
     )
 
@@ -94,7 +100,7 @@ if IS_WIN:
         mask = GetLogicalDrives()
         for i in range(26):
             if mask >> i & 1:
-                drive = chr(i + ord("A")) + ":"
+                drive = chr(i + ord('A')) + ':'
                 if GetDriveType(drive) == DRIVE_TYPE_CDROM:
                     yield drive
 
@@ -122,6 +128,7 @@ def get_cdrom_drives():
     """List available disc drives on the machine
     """
     # add default drive from libdiscid to the list
+    from picard.const.defaults import DEFAULT_DRIVES
     drives = set(DEFAULT_DRIVES)
     try:
         drives |= set(_iter_drives())

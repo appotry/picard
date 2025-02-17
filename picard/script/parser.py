@@ -11,7 +11,7 @@
 # Copyright (C) 2012 Chad Wilson
 # Copyright (C) 2012 stephen
 # Copyright (C) 2012, 2014, 2017 Wieland Hoffmann
-# Copyright (C) 2013-2014, 2017-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2017-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2014, 2017 Sophist-UK
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2016-2017 Ville Skyttä
@@ -38,11 +38,11 @@
 from collections.abc import MutableSequence
 from queue import LifoQueue
 
+from picard.extension_points import script_functions
 from picard.metadata import (
     MULTI_VALUED_JOINER,
     Metadata,
 )
-from picard.plugin import ExtensionPoint
 
 
 class ScriptError(Exception):
@@ -104,12 +104,12 @@ class StackItem:
 
     def __str__(self):
         if self.name is None:
-            return '{line:d}:{column:d}'.format(
+            return "{line:d}:{column:d}".format(
                 line=self.line,
                 column=self.column
             )
         else:
-            return '{line:d}:{column:d}:{name}'.format(
+            return "{line:d}:{column:d}:{name}".format(
                 line=self.line,
                 column=self.column,
                 name=self.name
@@ -124,23 +124,23 @@ class ScriptText(str):
 
 def normalize_tagname(name):
     if name.startswith('_'):
-        return "~" + name[1:]
+        return '~' + name[1:]
     return name
 
 
-class ScriptVariable(object):
+class ScriptVariable:
 
     def __init__(self, name):
         self.name = name
 
     def __repr__(self):
-        return '<ScriptVariable %%%s%%>' % self.name
+        return "<ScriptVariable %%%s%%>" % self.name
 
     def eval(self, state):
         return state.context.get(normalize_tagname(self.name), "")
 
 
-class ScriptFunction(object):
+class ScriptFunction:
 
     def __init__(self, name, args, parser, column=0, line=0):
         self.stackitem = StackItem(line, column, name)
@@ -201,7 +201,7 @@ def isidentif(ch):
     return ch.isalnum() or ch == '_'
 
 
-class ScriptParser(object):
+class ScriptParser:
 
     r"""Tagger script parser.
 
@@ -216,7 +216,6 @@ Grammar:
   argument    ::= (variable | function | argtext)*
 """
 
-    _function_registry = ExtensionPoint(label='function_registry')
     _cache = {}
 
     def __init__(self):
@@ -362,9 +361,7 @@ Grammar:
         return (tokens, ch)
 
     def load_functions(self):
-        self.functions = {}
-        for name, item in ScriptParser._function_registry:
-            self.functions[name] = item
+        self.functions = dict(script_functions.ext_point_script_functions)
 
     def parse(self, script, functions=False):
         """Parse the script."""
@@ -427,7 +424,7 @@ class MultiValue(MutableSequence):
         return self._multi.insert(index, value)
 
     def __repr__(self):
-        return '%s(%r, %r, %r)' % (self.__class__.__name__, self.parser, self._multi, self.separator)
+        return "%s(%r, %r, %r)" % (self.__class__.__name__, self.parser, self._multi, self.separator)
 
     def __str__(self):
         return self.separator.join(x for x in self if x)

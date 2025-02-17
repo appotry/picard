@@ -4,13 +4,16 @@
 #
 # Copyright (C) 2006-2008, 2012 Lukáš Lalinský
 # Copyright (C) 2008 Hendrik van Antwerpen
-# Copyright (C) 2008-2010, 2014-2015, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008-2010, 2014-2015, 2018-2025 Philipp Wolfer
 # Copyright (C) 2012-2013 Michael Wiencek
 # Copyright (C) 2012-2014 Wieland Hoffmann
 # Copyright (C) 2013 Calvin Walton
-# Copyright (C) 2013-2014, 2017-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2017-2023 Laurent Monin
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2017 Ville Skyttä
+# Copyright (C) 2022 Marcin Szalowicz
+# Copyright (C) 2023 certuna
+# Copyright (C) 2024 Giorgio Fontanive
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -56,7 +59,7 @@ from picard.util import (
 
 FLAC_MAX_BLOCK_SIZE = 2 ** 24 - 1  # FLAC block size is limited to a 24 bit integer
 INVALID_CHARS = re.compile('([^\x20-\x7d]|=)')
-UNSUPPORTED_TAGS = {'r128_album_gain', 'r128_track_gain'}
+UNSUPPORTED_TAGS = {'syncedlyrics', 'r128_album_gain', 'r128_track_gain'}
 
 
 def sanitize_key(key):
@@ -102,17 +105,29 @@ def flac_sort_pics_after_tags(metadata_blocks):
         metadata_blocks.insert(tagindex, pic)
 
 
+def flac_remove_empty_seektable(file):
+    """Removes an existing but empty seektable from the Flac file.
+
+    Some software has issues with files that contain an empty seek table. Since
+    no seektable is also valid, remove it.
+    """
+    seektable = file.seektable
+    if seektable and not seektable.seekpoints:
+        file.metadata_blocks = [b for b in file.metadata_blocks if b != file.seektable]
+        file.seektable = None
+
+
 class VCommentFile(File):
 
     """Generic VComment-based file."""
     _File = None
 
     __translate = {
-        "movement": "movementnumber",
-        "movementname": "movement",
-        "musicbrainz_releasetrackid": "musicbrainz_trackid",
-        "musicbrainz_trackid": "musicbrainz_recordingid",
-        "waveformatextensible_channel_mask": "~waveformatextensible_channel_mask",
+        'movement': 'movementnumber',
+        'movementname': 'movement',
+        'musicbrainz_releasetrackid': 'musicbrainz_trackid',
+        'musicbrainz_trackid': 'musicbrainz_recordingid',
+        'waveformatextensible_channel_mask': '~waveformatextensible_channel_mask',
     }
     __rtranslate = {v: k for k, v in __translate.items()}
 
@@ -124,8 +139,9 @@ class VCommentFile(File):
         metadata = Metadata()
         for origname, values in file.tags.items():
             for value in values:
+                value = value.rstrip('\0')
                 name = origname
-                if name == "date" or name == "originaldate":
+                if name in {'date', 'originaldate', 'releasedate'}:
                     # YYYY-00-00 => YYYY
                     value = sanitize_date(value)
                 elif name == 'performer' or name == 'comment':
@@ -155,18 +171,18 @@ class VCommentFile(File):
                         value = str(round((float(value) * (config.setting['rating_steps'] - 1))))
                     except ValueError:
                         log.warning('Invalid rating value in %r: %s', filename, value)
-                elif name == "fingerprint" and value.startswith("MusicMagic Fingerprint"):
-                    name = "musicip_fingerprint"
+                elif name == 'fingerprint' and value.startswith('MusicMagic Fingerprint'):
+                    name = 'musicip_fingerprint'
                     value = value[22:]
-                elif name == "tracktotal":
-                    if "totaltracks" in file.tags:
+                elif name == 'tracktotal':
+                    if 'totaltracks' in file.tags:
                         continue
-                    name = "totaltracks"
-                elif name == "disctotal":
-                    if "totaldiscs" in file.tags:
+                    name = 'totaltracks'
+                elif name == 'disctotal':
+                    if 'totaldiscs' in file.tags:
                         continue
-                    name = "totaldiscs"
-                elif name == "metadata_block_picture":
+                    name = 'totaldiscs'
+                elif name == 'metadata_block_picture':
                     try:
                         image = mutagen.flac.Picture(base64.standard_b64decode(value))
                         coverartimage = TagCoverArtImage(
@@ -179,7 +195,7 @@ class VCommentFile(File):
                             id3_type=image.type
                         )
                     except (CoverArtImageError, TypeError, ValueError, mutagen.flac.error) as e:
-                        log.error('Cannot load image from %r: %s' % (filename, e))
+                        log.error("Cannot load image from %r: %s", filename, e)
                     else:
                         metadata.images.append(coverartimage)
                     continue
@@ -196,16 +212,17 @@ class VCommentFile(File):
                         comment=image.desc,
                         support_types=True,
                         data=image.data,
+                        id3_type=image.type
                     )
                 except CoverArtImageError as e:
-                    log.error('Cannot load image from %r: %s' % (filename, e))
+                    log.error("Cannot load image from %r: %s", filename, e)
                 else:
                     metadata.images.append(coverartimage)
 
         # Read the unofficial COVERART tags, for backward compatibility only
-        if "metadata_block_picture" not in file.tags:
+        if 'metadata_block_picture' not in file.tags:
             try:
-                for data in file["COVERART"]:
+                for data in file['COVERART']:
                     try:
                         coverartimage = TagCoverArtImage(
                             file=filename,
@@ -213,7 +230,7 @@ class VCommentFile(File):
                             data=base64.standard_b64decode(data)
                         )
                     except (CoverArtImageError, TypeError, ValueError) as e:
-                        log.error('Cannot load image from %r: %s' % (filename, e))
+                        log.error("Cannot load image from %r: %s", filename, e)
                     else:
                         metadata.images.append(coverartimage)
             except KeyError:
@@ -226,12 +243,13 @@ class VCommentFile(File):
         log.debug("Saving file %r", filename)
         config = get_config()
         is_flac = self._File == mutagen.flac.FLAC
+        is_opus = self._File == mutagen.oggopus.OggOpus
         file = self._File(encode_filename(filename))
         if file.tags is None:
             file.add_tags()
-        if config.setting["clear_existing_tags"]:
+        if config.setting['clear_existing_tags']:
             preserve_tags = ['waveformatextensible_channel_mask']
-            if not is_flac and config.setting["preserve_images"]:
+            if not is_flac and config.setting['preserve_images']:
                 preserve_tags.append('metadata_block_picture')
                 preserve_tags.append('coverart')
             preserved_values = {}
@@ -243,10 +261,11 @@ class VCommentFile(File):
                 file.tags[name] = value
         images_to_save = list(metadata.images.to_be_saved_to_tags())
         if is_flac and (images_to_save
-                or (config.setting["clear_existing_tags"]
-                    and not config.setting["preserve_images"])):
+                or (config.setting['clear_existing_tags']
+                    and not config.setting['preserve_images'])):
             file.clear_pictures()
         tags = {}
+
         for name, value in metadata.items():
             if name == '~rating':
                 # Save rating according to http://code.google.com/p/quodlibet/wiki/Specs_VorbisComments
@@ -261,7 +280,7 @@ class VCommentFile(File):
                 continue
             elif name.startswith('lyrics:'):
                 name = 'lyrics'
-            elif name == "date" or name == "originaldate":
+            elif name in {'date', 'originaldate', 'releasedate'}:
                 # YYYY-00-00 => YYYY
                 value = sanitize_date(value)
             elif name.startswith('performer:') or name.startswith('comment:'):
@@ -274,45 +293,52 @@ class VCommentFile(File):
                 value = "MusicMagic Fingerprint%s" % value
             elif name in self.__rtranslate:
                 name = self.__rtranslate[name]
-            tags.setdefault(name.upper(), []).append(value)
+            tags.setdefault(name.upper(), []).append(value.rstrip('\0'))
 
-        if "totaltracks" in metadata:
-            tags.setdefault("TRACKTOTAL", []).append(metadata["totaltracks"])
-        if "totaldiscs" in metadata:
-            tags.setdefault("DISCTOTAL", []).append(metadata["totaldiscs"])
+        if 'totaltracks' in metadata:
+            tags.setdefault('TRACKTOTAL', []).append(metadata['totaltracks'])
+        if 'totaldiscs' in metadata:
+            tags.setdefault('DISCTOTAL', []).append(metadata['totaldiscs'])
 
         for image in images_to_save:
             picture = mutagen.flac.Picture()
             picture.data = image.data
             picture.mime = image.mimetype
             picture.desc = image.comment
-            picture.width = image.width
-            picture.height = image.height
             picture.type = image.id3_type
+
+            # libopus expects width, height and depth to be either all zero
+            # or all non-zero. As depth is not easily available, do not set
+            # width and height either. See PICARD-2909.
+            if not is_opus:
+                picture.width = image.width
+                picture.height = image.height
+
             if is_flac:
                 # See https://xiph.org/flac/format.html#metadata_block_picture
                 expected_block_size = (8 * 4 + len(picture.data)
                     + len(picture.mime)
                     + len(picture.desc.encode('UTF-8')))
                 if expected_block_size > FLAC_MAX_BLOCK_SIZE:
-                    log.error('Failed saving image to %r: Image size of %d bytes exceeds maximum FLAC block size of %d bytes',
+                    log.error("Failed saving image to %r: Image size of %d bytes exceeds maximum FLAC block size of %d bytes",
                         filename, expected_block_size, FLAC_MAX_BLOCK_SIZE)
                     continue
                 file.add_picture(picture)
             else:
-                tags.setdefault("METADATA_BLOCK_PICTURE", []).append(
+                tags.setdefault('METADATA_BLOCK_PICTURE', []).append(
                     base64.b64encode(picture.write()).decode('ascii'))
 
         file.tags.update(tags)
 
         self._remove_deleted_tags(metadata, file.tags)
 
+        kwargs = {}
         if is_flac:
             flac_sort_pics_after_tags(file.metadata_blocks)
-
-        kwargs = {}
-        if is_flac and config.setting["remove_id3_from_flac"]:
-            kwargs["deleteid3"] = True
+            if config.setting['fix_missing_seekpoints_flac']:
+                flac_remove_empty_seektable(file)
+            if config.setting['remove_id3_from_flac']:
+                kwargs['deleteid3'] = True
         try:
             file.save(**kwargs)
         except TypeError:
@@ -465,6 +491,6 @@ def OggContainerFile(filename):
     return guess_format(filename, options)
 
 
-OggContainerFile.EXTENSIONS = [".ogg"]
+OggContainerFile.EXTENSIONS = [".ogg", ".ogx"]
 OggContainerFile.NAME = "Ogg"
 OggContainerFile.supports_tag = VCommentFile.supports_tag

@@ -2,8 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2025 Philipp Wolfer
 # Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -21,12 +22,14 @@
 
 
 import base64
-import logging
 import os
+from unittest.mock import patch
 
 from mutagen.flac import (
     Padding,
     Picture,
+    SeekPoint,
+    SeekTable,
     VCFLACDict,
 )
 
@@ -35,10 +38,7 @@ from test.picardtestcase import (
     create_fake_png,
 )
 
-from picard import (
-    config,
-    log,
-)
+from picard import config
 from picard.coverart.image import CoverArtImage
 from picard.formats import vorbis
 from picard.formats.util import open_ as open_format
@@ -82,10 +82,7 @@ class CommonVorbisTests:
     class VorbisTestCase(CommonTests.TagFormatsTestCase):
         def test_invalid_rating(self):
             filename = os.path.join('test', 'data', 'test-invalid-rating.ogg')
-            old_log_level = log.get_effective_level()
-            log.set_level(logging.ERROR)
             metadata = load_metadata(filename)
-            log.set_level(old_log_level)
             self.assertEqual(metadata["~rating"], "THERATING")
 
         def test_supports_tags(self):
@@ -193,6 +190,16 @@ class CommonVorbisTests:
                 del metadata[invalid_tag]
                 save_metadata(self.filename, metadata)
 
+        @skipUnlessTestfile
+        def test_load_strip_trailing_null_char(self):
+            save_raw(self.filename, {
+                'date': '2023-04-18\0',
+                'title': 'foo\0',
+            })
+            metadata = load_metadata(self.filename)
+            self.assertEqual('2023-04-18', metadata['date'])
+            self.assertEqual('foo', metadata['title'])
+
 
 class FLACTest(CommonVorbisTests.VorbisTestCase):
     testfile = 'test.flac'
@@ -202,6 +209,7 @@ class FLACTest(CommonVorbisTests.VorbisTestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~format': 'FLAC',
+        '~filesize': '6546',
     }
     unexpected_info = ['~video']
 
@@ -250,6 +258,43 @@ class FLACTest(CommonVorbisTests.VorbisTestCase):
                 self.assertGreater(f.metadata_blocks.index(b), tagindex)
         self.assertTrue(haspics, "Picture block expected, none found")
 
+    @patch.object(vorbis, 'flac_remove_empty_seektable')
+    def test_setting_fix_missing_seekpoints_flac(self, mock_flac_remove_empty_seektable):
+        save_metadata(self.filename, Metadata())
+        mock_flac_remove_empty_seektable.assert_not_called()
+        self.set_config_values({
+            'fix_missing_seekpoints_flac': True
+        })
+        save_metadata(self.filename, Metadata())
+        mock_flac_remove_empty_seektable.assert_called_once()
+
+    @skipUnlessTestfile
+    def test_flac_remove_empty_seektable_remove_empty(self):
+        f = load_raw(self.filename)
+        # Add an empty seek table
+        seektable = SeekTable(None)
+        f.seektable = seektable
+        f.metadata_blocks.append(seektable)
+        # This is a zero length file. The empty seektable should get removed
+        vorbis.flac_remove_empty_seektable(f)
+        self.assertIsNone(f.seektable)
+        self.assertNotIn(seektable, f.metadata_blocks)
+
+    @skipUnlessTestfile
+    def test_flac_remove_empty_seektable_keep_existing(self):
+        f = load_raw(self.filename)
+        # Add an non-empty seek table
+        seektable = SeekTable(None)
+        seekpoint = SeekPoint(0, 0, 0)
+        seektable.seekpoints.append(seekpoint)
+        f.seektable = seektable
+        f.metadata_blocks.append(seektable)
+        # Existing non-empty seektable should be kept
+        vorbis.flac_remove_empty_seektable(f)
+        self.assertEqual(seektable, f.seektable)
+        self.assertIn(seektable, f.metadata_blocks)
+        self.assertEqual([seekpoint], f.seektable.seekpoints)
+
 
 class OggVorbisTest(CommonVorbisTests.VorbisTestCase):
     testfile = 'test.ogg'
@@ -258,6 +303,7 @@ class OggVorbisTest(CommonVorbisTests.VorbisTestCase):
         'length': 82,
         '~channels': '2',
         '~sample_rate': '44100',
+        '~filesize': '5221',
     }
 
 
@@ -268,6 +314,7 @@ class OggSpxTest(CommonVorbisTests.VorbisTestCase):
         'length': 89,
         '~channels': '2',
         '~bitrate': '29.6',
+        '~filesize': '608',
     }
     unexpected_info = ['~video']
 
@@ -278,6 +325,7 @@ class OggOpusTest(CommonVorbisTests.VorbisTestCase):
     expected_info = {
         'length': 82,
         '~channels': '2',
+        '~filesize': '1637',
     }
     unexpected_info = ['~video']
 
@@ -289,6 +337,16 @@ class OggOpusTest(CommonVorbisTests.VorbisTestCase):
         }
         self._test_supported_tags(tags)
 
+    def test_leave_picture_dimensions_empty(self):
+        cover = CoverArtImage(data=load_coverart_file('mb.jpg'))
+        file_save_image(self.filename, cover)
+        raw_metadata = load_raw(self.filename)
+        data = raw_metadata['metadata_block_picture'][0]
+        image = Picture(base64.standard_b64decode(data))
+        self.assertEqual(0, image.width)
+        self.assertEqual(0, image.height)
+        self.assertEqual(0, image.depth)
+
 
 class OggTheoraTest(CommonVorbisTests.VorbisTestCase):
     testfile = 'test.ogv'
@@ -297,6 +355,7 @@ class OggTheoraTest(CommonVorbisTests.VorbisTestCase):
         'length': 520,
         '~bitrate': '200.0',
         '~video': '1',
+        '~filesize': '5298',
     }
 
 
@@ -306,6 +365,7 @@ class OggFlacTest(CommonVorbisTests.VorbisTestCase):
     expected_info = {
         'length': 82,
         '~channels': '2',
+        '~filesize': '2573',
     }
     unexpected_info = ['~video']
 
@@ -389,6 +449,10 @@ class OggAudioVideoFileTest(PicardTestCase):
         self._test_file_is_type(
             open_format,
             self._copy_file_tmp('test.ogg', '.oga'),
+            vorbis.OggVorbisFile)
+        self._test_file_is_type(
+            open_format,
+            self._copy_file_tmp('test.ogg', '.ogx'),
             vorbis.OggVorbisFile)
 
     def test_ogg_opus(self):

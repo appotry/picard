@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2021 Philipp Wolfer
-# Copyright (C) 2020-2021 Laurent Monin
+# Copyright (C) 2019-2021, 2025 Philipp Wolfer
+# Copyright (C) 2020-2021, 2023-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -20,55 +20,44 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from picard.config import (
-    ListOption,
-    get_config,
-)
+from picard.config import get_config
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import N_
 
-from picard.ui.options import (
-    OptionsPage,
-    register_options_page,
-)
-from picard.ui.ui_options_interface_top_tags import (
+from picard.ui.forms.ui_options_interface_top_tags import (
     Ui_InterfaceTopTagsOptionsPage,
 )
+from picard.ui.options import OptionsPage
 
 
 class InterfaceTopTagsOptionsPage(OptionsPage):
 
-    NAME = "interface_top_tags"
+    NAME = 'interface_top_tags'
     TITLE = N_("Top Tags")
-    PARENT = "interface"
+    PARENT = 'interface'
     SORT_ORDER = 30
     ACTIVE = True
-    HELP_URL = '/config/options_interface_top_tags.html'
+    HELP_URL = "/config/options_interface_top_tags.html"
 
-    options = [
-        ListOption("setting", "metadatabox_top_tags", [
-            "title",
-            "artist",
-            "album",
-            "tracknumber",
-            "~length",
-            "date",
-        ]),
-    ]
+    OPTIONS = (
+        ('metadatabox_top_tags', ['top_tags_groupBox']),
+    )
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = Ui_InterfaceTopTagsOptionsPage()
         self.ui.setupUi(self)
 
     def load(self):
         config = get_config()
-        tags = config.setting["metadatabox_top_tags"]
+        tags = config.setting['metadatabox_top_tags']
         self.ui.top_tags_list.update(tags)
 
     def save(self):
         config = get_config()
         tags = list(self.ui.top_tags_list.tags)
-        if tags != config.setting["metadatabox_top_tags"]:
-            config.setting["metadatabox_top_tags"] = tags
+        if tags != config.setting['metadatabox_top_tags']:
+            config.setting['metadatabox_top_tags'] = tags
             self.tagger.window.metadata_box.update()
 
     def restore_defaults(self):

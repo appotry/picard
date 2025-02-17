@@ -7,7 +7,7 @@
 # Copyright (C) 2007-2011, 2020 Philipp Wolfer
 # Copyright (C) 2011 Michael Wiencek
 # Copyright (C) 2011-2012 Wieland Hoffmann
-# Copyright (C) 2013-2015, 2018-2019, 2021 Laurent Monin
+# Copyright (C) 2013-2015, 2018-2019, 2021, 2023-2024 Laurent Monin
 # Copyright (C) 2017 Sambhav Kothari
 #
 # This program is free software; you can redistribute it and/or
@@ -28,6 +28,7 @@
 from picard import log
 from picard.coverart.image import CoverArtImage
 from picard.coverart.providers.provider import CoverArtProvider
+from picard.i18n import N_
 
 
 class CoverArtProviderUrlRelationships(CoverArtProvider):
@@ -36,7 +37,7 @@ class CoverArtProviderUrlRelationships(CoverArtProvider):
     cover art"""
 
     NAME = "UrlRelationships"
-    TITLE = N_('Allowed Cover Art URLs')
+    TITLE = N_("Allowed Cover Art URLs")
 
     def queue_images(self):
         self.match_url_relations(('cover art link', 'has_cover_art_at'),

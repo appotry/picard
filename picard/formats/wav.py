@@ -6,8 +6,9 @@
 # Copyright (C) 2012-2013, 2017 Wieland Hoffmann
 # Copyright (C) 2013 Michael Wiencek
 # Copyright (C) 2016-2017 Sambhav Kothari
-# Copyright (C) 2018, 2020-2021 Laurent Monin
-# Copyright (C) 2018-2020 Philipp Wolfer
+# Copyright (C) 2018, 2020-2021, 2023-2024 Laurent Monin
+# Copyright (C) 2018-2022, 2024 Philipp Wolfer
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -36,10 +37,10 @@ from picard.metadata import Metadata
 
 
 try:
-    import mutagen.wave
     from mutagen._iff import assert_valid_chunk_id
     from mutagen._riff import RiffFile
     from mutagen._util import loadfile
+    import mutagen.wave
 
     # See https://exiftool.org/TagNames/RIFF.html
     TRANSLATE_RIFF_INFO = {
@@ -235,7 +236,7 @@ except ImportError:
             metadata['~sample_rate'] = f.getframerate()
             metadata.length = 1000 * f.getnframes() // f.getframerate()
             metadata['~format'] = self.NAME
-            self._add_path_to_metadata(metadata)
+            self._update_filesystem_metadata(metadata)
             return metadata
 
         def _save(self, filename, metadata):

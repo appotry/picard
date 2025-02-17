@@ -2,8 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2020 Laurent Monin
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2022, 2024 Laurent Monin
+# Copyright (C) 2019-2022, 2024 Philipp Wolfer
+# Copyright (C) 2024 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -33,6 +34,7 @@ from picard.config import (
     IntOption,
     ListOption,
     Option,
+    OptionError,
     TextOption,
 )
 
@@ -72,6 +74,63 @@ class TestPicardConfig(TestPicardConfigCommon):
 
         self.config.setting.remove("text_option")
         self.assertEqual(self.config.setting["text_option"], "abc")
+
+
+class TestPicardConfigOption(TestPicardConfigCommon):
+
+    def test_basic_option(self):
+        Option("setting", "option", "abc")
+        self.assertEqual(self.config.setting["option"], "abc")
+        self.config.setting["option"] = "def"
+        self.assertEqual(self.config.setting["option"], "def")
+
+    def test_option_get(self):
+        Option("setting", "option", "abc")
+        opt = Option.get("setting", "option")
+        self.assertIsInstance(opt, Option)
+        self.assertEqual(opt.default, "abc")
+        self.assertIsNone(Option.get("setting", "not_existing_option"))
+
+    def test_option_without_title(self):
+        Option("setting", "option", "abc")
+        opt = Option.get("setting", "option")
+        self.assertIsNone(opt.title)
+
+    def test_option_with_title(self):
+        Option("setting", "option", "abc", title="Title")
+        opt = Option.get("setting", "option")
+        self.assertEqual(opt.title, "Title")
+
+    def test_option_exists(self):
+        Option("setting", "option", "abc")
+        self.assertTrue(Option.exists("setting", "option"))
+        self.assertFalse(Option.exists("setting", "not_option"))
+
+    def test_option_add_if_missing(self):
+        Option("setting", "option", "abc")
+        Option.add_if_missing("setting", "option", "def")
+        self.assertEqual(self.config.setting["option"], "abc")
+
+        Option.add_if_missing("setting", "missing_option", "def", title="TITLE")
+        self.assertEqual(self.config.setting["missing_option"], "def")
+        self.assertEqual(Option.get_title('setting', 'missing_option'), 'TITLE')
+
+    def test_double_declaration(self):
+        Option("setting", "option", "abc")
+        with self.assertRaisesRegex(OptionError, r"^Option setting/option: Already declared"):
+            Option("setting", "option", "def")
+
+    def test_get_default(self):
+        Option("setting", "option", "abc")
+        self.assertEqual(Option.get_default("setting", "option"), "abc")
+        with self.assertRaisesRegex(OptionError, "^Option setting/unknown_option: No such option"):
+            Option.get_default("setting", "unknown_option")
+
+    def test_get_title(self):
+        Option("setting", "option", "abc", title="Title")
+        self.assertEqual(Option.get_title("setting", "option"), "Title")
+        with self.assertRaisesRegex(OptionError, "^Option setting/unknown_option: No such option"):
+            Option.get_title("setting", "unknown_option")
 
 
 class TestPicardConfigSection(TestPicardConfigCommon):
@@ -298,10 +357,9 @@ class TestPicardConfigFloatOption(TestPicardConfigCommon):
 
 class TestPicardConfigListOption(TestPicardConfigCommon):
 
-    # ListOption
     def test_list_opt_convert(self):
         opt = ListOption("setting", "list_option", [])
-        self.assertEqual(opt.convert("123"), ['1', '2', '3'])
+        self.assertEqual(opt.convert(('1', '2', '3')), ['1', '2', '3'])
 
     def test_list_opt_no_config(self):
         ListOption("setting", "list_option", ["a", "b"])
@@ -389,3 +447,94 @@ class TestPicardConfigVarOption(TestPicardConfigCommon):
         # store invalid value in config file directly
         self.config.setValue('setting/var_option', object)
         self.assertEqual(self.config.setting["var_option"], {"a", "b"})
+
+
+class TestPicardConfigSignals(TestPicardConfigCommon):
+
+    def _set_signal_value(self, name: str, old_value: object, new_value: object):
+        self.setting_name = name
+        self.setting_old_value = old_value
+        self.setting_new_value = new_value
+
+    def test_file_naming_signal(self):
+        TextOption('setting', 'option_text', 'abc')
+        BoolOption('setting', 'option_bool', False)
+        IntOption('setting', 'option_int', 1)
+        FloatOption('setting', 'option_float', 1.0)
+        ListOption('setting', 'option_list', [1, 2, 3])
+        Option('setting', 'option_set', {1, 2, 3})
+        Option('setting', 'option_dict', {'a': 1, 'b': 2, 'c': 3})
+
+        self.config.setting.setting_changed.connect(self._set_signal_value)
+
+        # Test text option
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_text'] = 'def'
+        self.assertEqual(self.setting_name, 'option_text')
+        self.assertEqual(self.setting_old_value, 'abc')
+        self.assertEqual(self.setting_new_value, 'def')
+
+        # Test no signal if set to same value
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_text'] = 'def'
+        self.assertEqual(self.setting_name, '')
+        self.assertEqual(self.setting_old_value, '')
+        self.assertEqual(self.setting_new_value, '')
+
+        # Test bool option
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_bool'] = True
+        self.assertEqual(self.setting_name, 'option_bool')
+        self.assertEqual(self.setting_old_value, False)
+        self.assertEqual(self.setting_new_value, True)
+
+        # Test int option
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_int'] = 2
+        self.assertEqual(self.setting_name, 'option_int')
+        self.assertEqual(self.setting_old_value, 1)
+        self.assertEqual(self.setting_new_value, 2)
+
+        # Test float option
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_float'] = 2.5
+        self.assertEqual(self.setting_name, 'option_float')
+        self.assertEqual(self.setting_old_value, 1.0)
+        self.assertEqual(self.setting_new_value, 2.5)
+
+        # Test list option
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_list'] = [3, 2, 1]
+        self.assertEqual(self.setting_name, 'option_list')
+        self.assertEqual(self.setting_old_value, [1, 2, 3])
+        self.assertEqual(self.setting_new_value, [3, 2, 1])
+
+        # Test option (set)
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_set'] = {4, 5, 6}
+        self.assertEqual(self.setting_name, 'option_set')
+        self.assertEqual(self.setting_old_value, {1, 2, 3})
+        self.assertEqual(self.setting_new_value, {4, 5, 6})
+
+        # Test option (dict)
+        self.setting_name = ''
+        self.setting_old_value = ''
+        self.setting_new_value = ''
+        self.config.setting['option_dict'] = {'a': 3, 'b': 2, 'c': 1}
+        self.assertEqual(self.setting_name, 'option_dict')
+        self.assertEqual(self.setting_old_value, {'a': 1, 'b': 2, 'c': 3})
+        self.assertEqual(self.setting_new_value, {'a': 3, 'b': 2, 'c': 1})

@@ -3,12 +3,12 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006-2008, 2011 Lukáš Lalinský
-# Copyright (C) 2009, 2015, 2018-2021 Philipp Wolfer
+# Copyright (C) 2009, 2015, 2018-2023 Philipp Wolfer
 # Copyright (C) 2011-2014 Michael Wiencek
 # Copyright (C) 2012 Chad Wilson
 # Copyright (C) 2012 Johannes Weißl
 # Copyright (C) 2012-2014, 2018, 2020 Wieland Hoffmann
-# Copyright (C) 2013-2014, 2016, 2018-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2016, 2018-2024 Laurent Monin
 # Copyright (C) 2013-2014, 2017 Sophist-UK
 # Copyright (C) 2016 Rahul Raturi
 # Copyright (C) 2016-2017 Sambhav Kothari
@@ -18,6 +18,9 @@
 # Copyright (C) 2020 Gabriel Ferreira
 # Copyright (C) 2020 Ray Bouchard
 # Copyright (C) 2021 Petit Minion
+# Copyright (C) 2022 Bob Swift
+# Copyright (C) 2022 skelly37
+# Copyright (C) 2024 x11x
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -41,19 +44,17 @@ from collections.abc import (
 )
 from functools import partial
 
-from PyQt5.QtCore import QObject
+from PyQt6 import QtCore
 
 from picard.config import get_config
 from picard.mbjson import (
     artist_credit_from_node,
     get_score,
 )
-from picard.plugin import (
-    PluginFunctions,
-    PluginPriority,
-)
+from picard.plugin import PluginFunctions
 from picard.similarity import similarity2
 from picard.util import (
+    ReadWriteLockContext,
     extract_year_from_date,
     linear_combination_of_weights,
 )
@@ -94,17 +95,19 @@ def weights_from_release_type_scores(parts, release, release_type_scores,
 
     type_scores = dict(release_type_scores)
     score = 0.0
+    other_score = type_scores.get('Other', 0.5)
     if 'release-group' in release and 'primary-type' in release['release-group']:
         types_found = [release['release-group']['primary-type']]
         if 'secondary-types' in release['release-group']:
             types_found += release['release-group']['secondary-types']
-        other_score = type_scores.get('Other', 0.5)
         for release_type in types_found:
             type_score = type_scores.get(release_type, other_score)
             if type_score == 0:
                 skip_release = True
             score += type_score
         score /= len(types_found)
+    else:
+        score = other_score
 
     if skip_release:
         parts.append((0, 9999))
@@ -145,6 +148,10 @@ def weights_from_preferred_formats(parts, release, preferred_formats, weight):
         parts.append((score, weight))
 
 
+def trackcount_score(actual, expected):
+    return 0.0 if actual > expected else 0.3 if actual < expected else 1.0
+
+
 class Metadata(MutableMapping):
 
     """List of metadata items with dict-like access."""
@@ -171,6 +178,7 @@ class Metadata(MutableMapping):
     multi_valued_joiner = MULTI_VALUED_JOINER
 
     def __init__(self, *args, deleted_tags=None, images=None, length=None, **kwargs):
+        self._lock = ReadWriteLockContext()
         self._store = dict()
         self.deleted_tags = set()
         self.length = 0
@@ -196,6 +204,8 @@ class Metadata(MutableMapping):
 
     @staticmethod
     def length_score(a, b):
+        if a is None or b is None:
+            return 0.0
         return (1.0 - min(abs(a - b),
                 LENGTH_SCORE_THRES_MS) / float(LENGTH_SCORE_THRES_MS))
 
@@ -204,30 +214,32 @@ class Metadata(MutableMapping):
         if ignored is None:
             ignored = []
 
-        if self.length and other.length and '~length' not in ignored:
-            score = self.length_score(self.length, other.length)
-            parts.append((score, 8))
+        with self._lock.lock_for_read():
+            if self.length and other.length and '~length' not in ignored:
+                score = self.length_score(self.length, other.length)
+                parts.append((score, 8))
 
-        for name, weight in self.__weights:
-            if name in ignored:
-                continue
-            a = self[name]
-            b = other[name]
-            if a and b:
-                if name in {'tracknumber', 'totaltracks', 'discnumber', 'totaldiscs'}:
-                    try:
-                        ia = int(a)
-                        ib = int(b)
-                    except ValueError:
-                        ia = a
-                        ib = b
-                    score = 1.0 - (int(ia != ib))
-                else:
-                    score = similarity2(a, b)
-                parts.append((score, weight))
-            elif (a and name in other.deleted_tags
-                  or b and name in self.deleted_tags):
-                parts.append((0, weight))
+            for name, weight in self.__weights:
+                if name in ignored:
+                    continue
+                a = self[name]
+                b = other[name]
+                if a and b:
+                    if name in {'tracknumber', 'totaltracks', 'discnumber', 'totaldiscs'}:
+                        try:
+                            ia = int(a)
+                            ib = int(b)
+                        except ValueError:
+                            ia = a
+                            ib = b
+                        score = 1.0 - (int(ia != ib))
+                    else:
+                        score = similarity2(a, b)
+                    parts.append((score, weight))
+                elif (a and name in other.deleted_tags
+                     or b and name in self.deleted_tags):
+                    parts.append((0, weight))
+
         return linear_combination_of_weights(parts)
 
     def compare_to_release(self, release, weights):
@@ -241,113 +253,142 @@ class Metadata(MutableMapping):
 
     def compare_to_release_parts(self, release, weights):
         parts = []
-        if "album" in self:
-            b = release['title']
-            parts.append((similarity2(self["album"], b), weights["album"]))
 
-        if "albumartist" in self and "albumartist" in weights:
-            a = self["albumartist"]
-            b = artist_credit_from_node(release['artist-credit'])[0]
-            parts.append((similarity2(a, b), weights["albumartist"]))
+        with self._lock.lock_for_read():
+            if 'album' in self and 'album' in weights:
+                b = release['title']
+                parts.append((similarity2(self['album'], b), weights['album']))
 
-        try:
-            a = int(self["totaltracks"])
-            b = release['track-count']
-            score = 0.0 if a > b else 0.3 if a < b else 1.0
-            parts.append((score, weights["totaltracks"]))
-        except (ValueError, KeyError):
-            pass
+            if 'albumartist' in self and 'albumartist' in weights:
+                a = self['albumartist']
+                b = artist_credit_from_node(release['artist-credit'])[0]
+                parts.append((similarity2(a, b), weights['albumartist']))
 
-        # Date Logic
-        date_match_factor = 0.0
-        if "date" in release and release['date'] != '':
-            release_date = release['date']
-            if "date" in self:
-                metadata_date = self['date']
-                if release_date == metadata_date:
-                    # release has a date and it matches what our metadata had exactly.
-                    date_match_factor = self.__date_match_factors['exact']
+            if 'totaltracks' in weights:
+                try:
+                    a = int(self['totaltracks'])
+                    if 'media' in release:
+                        score = 0.0
+                        for media in release['media']:
+                            b = media.get('track-count', 0)
+                            score = max(score, trackcount_score(a, b))
+                            if score == 1.0:
+                                break
+                    else:
+                        b = release['track-count']
+                        score = trackcount_score(a, b)
+                    parts.append((score, weights['totaltracks']))
+                except (ValueError, KeyError):
+                    pass
+
+            if 'totalalbumtracks' in weights:
+                try:
+                    a = int(self['~totalalbumtracks'] or self['totaltracks'])
+                    b = release['track-count']
+                    score = trackcount_score(a, b)
+                    parts.append((score, weights['totalalbumtracks']))
+                except (ValueError, KeyError):
+                    pass
+
+            # Date Logic
+            date_match_factor = 0.0
+            if 'date' in weights:
+                if 'date' in release and release['date'] != '':
+                    release_date = release['date']
+                    if 'date' in self:
+                        metadata_date = self['date']
+                        if release_date == metadata_date:
+                            # release has a date and it matches what our metadata had exactly.
+                            date_match_factor = self.__date_match_factors['exact']
+                        else:
+                            release_year = extract_year_from_date(release_date)
+                            if release_year is not None:
+                                metadata_year = extract_year_from_date(metadata_date)
+                                if metadata_year is not None:
+                                    if release_year == metadata_year:
+                                        # release has a date and it matches what our metadata had for year exactly.
+                                        date_match_factor = self.__date_match_factors['year']
+                                    elif abs(release_year - metadata_year) <= 2:
+                                        # release has a date and it matches what our metadata had closely (year +/- 2).
+                                        date_match_factor = self.__date_match_factors['close_year']
+                                    else:
+                                        # release has a date but it does not match ours (all else equal,
+                                        # its better to have an unknown date than a wrong date, since
+                                        # the unknown could actually be correct)
+                                        date_match_factor = self.__date_match_factors['differed']
+                    else:
+                        # release has a date but we don't have one (all else equal, we prefer
+                        # tracks that have non-blank date values)
+                        date_match_factor = self.__date_match_factors['exists_vs_null']
                 else:
-                    release_year = extract_year_from_date(release_date)
-                    if release_year is not None:
-                        metadata_year = extract_year_from_date(metadata_date)
-                        if metadata_year is not None:
-                            if release_year == metadata_year:
-                                # release has a date and it matches what our metadata had for year exactly.
-                                date_match_factor = self.__date_match_factors['year']
-                            elif abs(release_year - metadata_year) <= 2:
-                                # release has a date and it matches what our metadata had closely (year +/- 2).
-                                date_match_factor = self.__date_match_factors['close_year']
-                            else:
-                                # release has a date but it does not match ours (all else equal,
-                                # its better to have an unknown date than a wrong date, since
-                                # the unknown could actually be correct)
-                                date_match_factor = self.__date_match_factors['differed']
-            else:
-                # release has a date but we don't have one (all else equal, we prefer
-                # tracks that have non-blank date values)
-                date_match_factor = self.__date_match_factors['exists_vs_null']
-        else:
-            # release has a no date (all else equal, we don't prefer this
-            # release since its date is missing)
-            date_match_factor = self.__date_match_factors['no_release_date']
+                    # release has a no date (all else equal, we don't prefer this
+                    # release since its date is missing)
+                    date_match_factor = self.__date_match_factors['no_release_date']
 
-        parts.append((date_match_factor, weights['date']))
+                parts.append((date_match_factor, weights['date']))
 
         config = get_config()
-        weights_from_preferred_countries(parts, release,
-                                         config.setting["preferred_release_countries"],
-                                         weights["releasecountry"])
+        if 'releasecountry' in weights:
+            weights_from_preferred_countries(parts, release,
+                                             config.setting['preferred_release_countries'],
+                                             weights['releasecountry'])
 
-        weights_from_preferred_formats(parts, release,
-                                       config.setting["preferred_release_formats"],
-                                       weights["format"])
+        if 'format' in weights:
+            weights_from_preferred_formats(parts, release,
+                                           config.setting['preferred_release_formats'],
+                                           weights['format'])
 
-        if "releasetype" in weights:
+        if 'releasetype' in weights:
             weights_from_release_type_scores(parts, release,
-                                             config.setting["release_type_scores"],
-                                             weights["releasetype"])
+                                             config.setting['release_type_scores'],
+                                             weights['releasetype'])
 
-        rg = QObject.tagger.get_release_group_by_id(release['release-group']['id'])
-        if release['id'] in rg.loaded_albums:
-            parts.append((1.0, 6))
+        if 'release-group' in release:
+            tagger = QtCore.QCoreApplication.instance()
+            rg = tagger.get_release_group_by_id(release['release-group']['id'])
+            if release['id'] in rg.loaded_albums:
+                parts.append((1.0, 6))
 
         return parts
 
     def compare_to_track(self, track, weights):
         parts = []
-
-        if 'title' in self:
-            a = self['title']
-            b = track.get('title', '')
-            parts.append((similarity2(a, b), weights["title"]))
-
-        if 'artist' in self:
-            a = self['artist']
-            artist_credits = track.get('artist-credit', [])
-            b = artist_credit_from_node(artist_credits)[0]
-            parts.append((similarity2(a, b), weights["artist"]))
-
-        a = self.length
-        if a > 0 and 'length' in track:
-            b = track['length']
-            score = self.length_score(a, b)
-            parts.append((score, weights["length"]))
-
         releases = []
-        if "releases" in track:
-            releases = track['releases']
 
-        search_score = get_score(track)
-        if not releases:
-            sim = linear_combination_of_weights(parts) * search_score
-            return SimMatchTrack(similarity=sim, releasegroup=None, release=None, track=track)
+        with self._lock.lock_for_read():
+            if 'title' in self:
+                a = self['title']
+                b = track.get('title', '')
+                parts.append((similarity2(a, b), weights["title"]))
 
-        if 'isvideo' in weights:
-            metadata_is_video = self['~video'] == '1'
-            track_is_video = track.get('video', False)
-            score = 1 if metadata_is_video == track_is_video else 0
-            parts.append((score, weights['isvideo']))
+            if 'artist' in self:
+                a = self['artist']
+                artist_credits = track.get('artist-credit', [])
+                b = artist_credit_from_node(artist_credits)[0]
+                parts.append((similarity2(a, b), weights["artist"]))
+
+            a = self.length
+            if a > 0 and 'length' in track:
+                b = track['length']
+                score = self.length_score(a, b)
+                parts.append((score, weights["length"]))
+
+            if 'isvideo' in weights:
+                metadata_is_video = self['~video'] == '1'
+                track_is_video = bool(track.get('video'))
+                score = 1 if metadata_is_video == track_is_video else 0
+                parts.append((score, weights['isvideo']))
+
+            if "releases" in track:
+                releases = track['releases']
+
+            search_score = get_score(track)
+            if not releases:
+                config = get_config()
+                score = dict(config.setting['release_type_scores']).get('Other', 0.5)
+                parts.append((score, _get_total_release_weight(weights)))
+                sim = linear_combination_of_weights(parts) * search_score
+                return SimMatchTrack(similarity=sim, releasegroup=None, release=None, track=track)
 
         result = SimMatchTrack(similarity=-1, releasegroup=None, release=None, track=None)
         for release in releases:
@@ -360,40 +401,43 @@ class Metadata(MutableMapping):
 
     def copy(self, other, copy_images=True):
         self.clear()
-        self._update_from_metadata(other, copy_images)
+        with self._lock.lock_for_write():
+            self._update_from_metadata(other, copy_images)
 
     def update(self, *args, **kwargs):
-        one_arg = len(args) == 1
-        if one_arg and (isinstance(args[0], self.__class__) or isinstance(args[0], MultiMetadataProxy)):
-            self._update_from_metadata(args[0])
-        elif one_arg and isinstance(args[0], MutableMapping):
-            # update from MutableMapping (ie. dict)
-            for k, v in args[0].items():
-                self[k] = v
-        elif args or kwargs:
-            # update from a dict-like constructor parameters
-            for k, v in dict(*args, **kwargs).items():
-                self[k] = v
-        else:
-            # no argument, raise TypeError to mimic dict.update()
-            raise TypeError("descriptor 'update' of '%s' object needs an argument" % self.__class__.__name__)
+        with self._lock.lock_for_write():
+            one_arg = len(args) == 1
+            if one_arg and (isinstance(args[0], self.__class__) or isinstance(args[0], MultiMetadataProxy)):
+                self._update_from_metadata(args[0])
+            elif one_arg and isinstance(args[0], MutableMapping):
+                # update from MutableMapping (ie. dict)
+                for k, v in args[0].items():
+                    self._set(k, v)
+            elif args or kwargs:
+                # update from a dict-like constructor parameters
+                for k, v in dict(*args, **kwargs).items():
+                    self._set(k, v)
+            else:
+                # no argument, raise TypeError to mimic dict.update()
+                raise TypeError("descriptor 'update' of '%s' object needs an argument" % self.__class__.__name__)
 
     def diff(self, other):
         """Returns a new Metadata object with only the tags that changed in self compared to other"""
-        m = Metadata()
-        for tag, values in self.rawitems():
-            other_values = other.getall(tag)
-            if other_values != values:
-                m[tag] = values
-        m.deleted_tags = self.deleted_tags - other.deleted_tags
-        return m
+        with self._lock.lock_for_read():
+            m = Metadata()
+            for tag, values in self.rawitems():
+                other_values = other.getall(tag)
+                if other_values != values:
+                    m[tag] = values
+            m.deleted_tags = self.deleted_tags - other.deleted_tags
+            return m
 
     def _update_from_metadata(self, other, copy_images=True):
         for k, v in other.rawitems():
-            self.set(k, v[:])
+            self._set(k, v[:])
 
         for tag in other.deleted_tags:
-            del self[tag]
+            self._del(tag)
 
         if copy_images and other.images:
             self.images = other.images.copy()
@@ -401,10 +445,11 @@ class Metadata(MutableMapping):
             self.length = other.length
 
     def clear(self):
-        self._store.clear()
-        self.images = ImageList()
-        self.length = 0
-        self.clear_deleted()
+        with self._lock.lock_for_write():
+            self._store.clear()
+            self.images = ImageList()
+            self.length = 0
+            self.clear_deleted()
 
     def clear_deleted(self):
         self.deleted_tags = set()
@@ -414,39 +459,48 @@ class Metadata(MutableMapping):
         return name.rstrip(':')
 
     def getall(self, name):
-        return self._store.get(self.normalize_tag(name), [])
+        with self._lock.lock_for_read():
+            return self._store.get(self.normalize_tag(name), [])
 
     def getraw(self, name):
-        return self._store[self.normalize_tag(name)]
+        with self._lock.lock_for_read():
+            return self._store[self.normalize_tag(name)]
 
     def get(self, key, default=None):
-        values = self._store.get(self.normalize_tag(key), None)
-        if values:
-            return self.multi_valued_joiner.join(values)
-        else:
-            return default
+        with self._lock.lock_for_read():
+            values = self._store.get(self.normalize_tag(key), None)
+            if values:
+                return self.multi_valued_joiner.join(values)
+            else:
+                return default
 
     def __getitem__(self, name):
         return self.get(name, '')
 
-    def set(self, name, values):
+    def _set(self, name, values):
         name = self.normalize_tag(name)
         if isinstance(values, str) or not isinstance(values, Iterable):
             values = [values]
-        values = [str(value) for value in values if value or value == 0]
-        if values:
+        values = [str(value) for value in values if value or value == 0 or value == '']
+        # Remove if there is only a single empty or blank element.
+        if values and (len(values) > 1 or values[0]):
             self._store[name] = values
             self.deleted_tags.discard(name)
         elif name in self._store:
-            del self[name]
+            self._del(name)
+
+    def set(self, name, values):
+        with self._lock.lock_for_write():
+            self._set(name, values)
 
     def __setitem__(self, name, values):
         self.set(name, values)
 
     def __contains__(self, name):
-        return self._store.__contains__(self.normalize_tag(name))
+        with self._lock.lock_for_read():
+            return self._store.__contains__(self.normalize_tag(name))
 
-    def __delitem__(self, name):
+    def _del(self, name):
         name = self.normalize_tag(name)
         try:
             del self._store[name]
@@ -455,20 +509,24 @@ class Metadata(MutableMapping):
         finally:
             self.deleted_tags.add(name)
 
+    def __delitem__(self, name):
+        with self._lock.lock_for_write():
+            self._del(name)
+
+    def delete(self, name):
+        del self[self.normalize_tag(name)]
+
     def add(self, name, value):
         if value or value == 0:
-            name = self.normalize_tag(name)
-            self._store.setdefault(name, []).append(str(value))
-            self.deleted_tags.discard(name)
+            with self._lock.lock_for_write():
+                name = self.normalize_tag(name)
+                self._store.setdefault(name, []).append(str(value))
+                self.deleted_tags.discard(name)
 
     def add_unique(self, name, value):
         name = self.normalize_tag(name)
         if value not in self.getall(name):
             self.add(name, value)
-
-    def delete(self, name):
-        """Deprecated: use del directly"""
-        del self[self.normalize_tag(name)]
 
     def unset(self, name):
         """Removes a tag from the metadata, but does not mark it for deletion.
@@ -476,19 +534,22 @@ class Metadata(MutableMapping):
         Args:
             name: name of the tag to unset
         """
-        name = self.normalize_tag(name)
-        try:
-            del self._store[name]
-        except KeyError:
-            pass
+        with self._lock.lock_for_write():
+            name = self.normalize_tag(name)
+            try:
+                del self._store[name]
+            except KeyError:
+                pass
 
     def __iter__(self):
-        return iter(self._store)
+        with self._lock.lock_for_read():
+            yield from self._store
 
     def items(self):
-        for name, values in self._store.items():
-            for value in values:
-                yield name, value
+        with self._lock.lock_for_read():
+            for name, values in self._store.items():
+                for value in values:
+                    yield name, value
 
     def rawitems(self):
         """Returns the metadata items.
@@ -499,9 +560,10 @@ class Metadata(MutableMapping):
         return self._store.items()
 
     def apply_func(self, func):
-        for name, values in list(self.rawitems()):
-            if name not in PRESERVED_TAGS:
-                self[name] = [func(value) for value in values]
+        with self._lock.lock_for_write():
+            for name, values in list(self.rawitems()):
+                if name not in PRESERVED_TAGS:
+                    self._set(name, (func(value) for value in values))
 
     def strip_whitespace(self):
         """Strip leading/trailing whitespace.
@@ -521,6 +583,61 @@ class Metadata(MutableMapping):
 
     def __str__(self):
         return ("store: %r\ndeleted: %r\nimages: %r\nlength: %r" % (self._store, self.deleted_tags, [str(img) for img in self.images], self.length))
+
+    def add_images(self, added_images):
+        if not added_images:
+            return False
+
+        current_images = set(self.images)
+        if added_images.isdisjoint(current_images):
+            self.images = ImageList(current_images.union(added_images))
+            self.has_common_images = False
+            return True
+
+        return False
+
+    def remove_images(self, sources, removed_images):
+        """Removes `removed_images` from `images`, but only if they are not included in `sources`.
+
+        Args:
+            sources: List of source `Metadata` objects
+            removed_images: Set of `CoverArt` to removed
+
+        Returns:
+            True if self.images was modified, False else
+        """
+        if not self.images or not removed_images:
+            return False
+
+        if not sources:
+            self.images = ImageList()
+            self.has_common_images = True
+            return True
+
+        current_images = set(self.images)
+
+        if self.has_common_images and current_images == removed_images:
+            return False
+
+        common_images = True  # True, if all children share the same images
+        previous_images = None
+
+        # Iterate over all sources and check whether the images proposed to be
+        # removed are used in any sources. Images used in existing sources
+        # must not be removed.
+        for source_metadata in sources:
+            source_images = set(source_metadata.images)
+            if previous_images and common_images and previous_images != source_images:
+                common_images = False
+            previous_images = set(source_metadata.images)  # Remember for next iteration
+            removed_images = removed_images.difference(source_images)
+            if not removed_images and not common_images:
+                return False  # No images left to remove, abort immediately
+
+        new_images = current_images.difference(removed_images)
+        self.images = ImageList(new_images)
+        self.has_common_images = common_images
+        return True
 
 
 class MultiMetadataProxy:
@@ -606,23 +723,19 @@ class MultiMetadataProxy:
         return self.__read('__repr__')
 
 
-_album_metadata_processors = PluginFunctions(label='album_metadata_processors')
-_track_metadata_processors = PluginFunctions(label='track_metadata_processors')
+def _get_total_release_weight(weights):
+    release_weights = ('album', 'totaltracks', 'totalalbumtracks', 'releasetype',
+                       'releasecountry', 'format', 'date')
+    return sum(weights[w] for w in release_weights if w in weights)
 
 
-def register_album_metadata_processor(function, priority=PluginPriority.NORMAL):
-    """Registers new album-level metadata processor."""
-    _album_metadata_processors.register(function.__module__, function, priority)
-
-
-def register_track_metadata_processor(function, priority=PluginPriority.NORMAL):
-    """Registers new track-level metadata processor."""
-    _track_metadata_processors.register(function.__module__, function, priority)
+album_metadata_processors = PluginFunctions(label='album_metadata_processors')
+track_metadata_processors = PluginFunctions(label='track_metadata_processors')
 
 
 def run_album_metadata_processors(album_object, metadata, release):
-    _album_metadata_processors.run(album_object, metadata, release)
+    album_metadata_processors.run(album_object, metadata, release)
 
 
 def run_track_metadata_processors(album_object, metadata, track, release=None):
-    _track_metadata_processors.run(album_object, metadata, track, release)
+    track_metadata_processors.run(album_object, metadata, track, release)

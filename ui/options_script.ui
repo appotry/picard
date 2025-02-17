@@ -29,12 +29,29 @@
    <item>
     <widget class="QGroupBox" name="enable_tagger_scripts">
      <property name="title">
-      <string>Tagger Script(s)</string>
+      <string>Enable Tagger Script(s)</string>
      </property>
      <property name="checkable">
       <bool>true</bool>
      </property>
      <layout class="QVBoxLayout" name="verticalLayout">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="label">
+          <property name="text">
+           <string>Tagger scripts that have been activated below will be executed automatically for each track of a release loaded from MusicBrainz.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
       <item>
        <widget class="QSplitter" name="scripting_options_splitter">
         <property name="sizePolicy">
@@ -96,7 +113,7 @@
         <item>
          <widget class="QToolButton" name="move_up_button">
           <property name="toolTip">
-           <string>Move script up</string>
+           <string>Move tagger script up</string>
           </property>
           <property name="icon">
            <iconset theme=":/images/16x16/go-up.png">
@@ -107,7 +124,7 @@
         <item>
          <widget class="QToolButton" name="move_down_button">
           <property name="toolTip">
-           <string>Move script down</string>
+           <string>Move tagger script down</string>
           </property>
           <property name="icon">
            <iconset theme=":/images/16x16/go-down.png">
@@ -131,20 +148,20 @@
         <item>
          <widget class="QToolButton" name="add_button">
           <property name="toolTip">
-           <string>Add new script</string>
+           <string>Add new tagger script</string>
           </property>
           <property name="text">
-           <string>Add new script</string>
+           <string>Add new tagger script</string>
           </property>
          </widget>
         </item>
         <item>
          <widget class="QToolButton" name="remove_button">
           <property name="toolTip">
-           <string>Remove the selected script</string>
+           <string>Remove the selected tagger script</string>
           </property>
           <property name="text">
-           <string>Remove script</string>
+           <string>Remove tagger script</string>
           </property>
          </widget>
         </item>
@@ -197,7 +214,7 @@
            </sizepolicy>
           </property>
           <property name="text">
-           <string>Scripting Documentation</string>
+           <string>Documentation</string>
           </property>
          </widget>
         </item>
