@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2020 Philipp Wolfer
-# Copyright (C) 2020-2021 Laurent Monin
+# Copyright (C) 2019-2023 Philipp Wolfer
+# Copyright (C) 2020-2024 Laurent Monin
 # Copyright (C) 2021 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
@@ -20,16 +20,22 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
+
 from functools import partial
 import threading
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
 
-from picard.const import DEFAULT_SCRIPT_NAME
+from picard.const.defaults import DEFAULT_SCRIPT_NAME
+from picard.i18n import (
+    gettext as _,
+    gettext_constants,
+)
+from picard.script import TaggingScriptSetting
 from picard.util import unique_numbered_title
 
 from picard.ui import HashableListWidgetItem
@@ -39,8 +45,8 @@ class ScriptListWidget(QtWidgets.QListWidget):
 
     signal_reset_selected_item = QtCore.pyqtSignal()
 
-    def __init__(self, parent):
-        super().__init__(parent)
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
         self.itemChanged.connect(self.item_changed)
         self.currentItemChanged.connect(self.current_item_changed)
         self.old_row = -1
@@ -50,33 +56,33 @@ class ScriptListWidget(QtWidgets.QListWidget):
         item = self.itemAt(event.x(), event.y())
         if item:
             menu = QtWidgets.QMenu(self)
-            rename_action = QtWidgets.QAction(_("Rename script"), self)
+            rename_action = QtGui.QAction(_("Rename script"), self)
             rename_action.triggered.connect(partial(self.editItem, item))
             menu.addAction(rename_action)
-            remove_action = QtWidgets.QAction(_("Remove script"), self)
+            remove_action = QtGui.QAction(_("Remove script"), self)
             remove_action.triggered.connect(partial(self.remove_script, item))
             menu.addAction(remove_action)
-            menu.exec_(event.globalPos())
+            menu.exec(event.globalPos())
 
     def keyPressEvent(self, event):
-        if event.matches(QtGui.QKeySequence.Delete):
+        if event.matches(QtGui.QKeySequence.StandardKey.Delete):
             self.remove_selected_script()
-        elif event.key() == QtCore.Qt.Key_Insert:
+        elif event.key() == QtCore.Qt.Key.Key_Insert:
             self.add_script()
         else:
             super().keyPressEvent(event)
 
     def unique_script_name(self):
         existing_titles = [self.item(i).name for i in range(self.count())]
-        return unique_numbered_title(_(DEFAULT_SCRIPT_NAME), existing_titles)
+        return unique_numbered_title(gettext_constants(DEFAULT_SCRIPT_NAME), existing_titles)
 
     def add_script(self):
         numbered_name = self.unique_script_name()
-        list_item = ScriptListWidgetItem(name=numbered_name)
-        list_item.setCheckState(QtCore.Qt.Checked)
+        list_item = ScriptListWidgetItem(TaggingScriptSetting(name=numbered_name, enabled=True))
+        list_item.setCheckState(QtCore.Qt.CheckState.Checked)
         self.addItem(list_item)
-        self.setCurrentItem(list_item, QtCore.QItemSelectionModel.Clear
-            | QtCore.QItemSelectionModel.SelectCurrent)
+        self.setCurrentItem(list_item, QtCore.QItemSelectionModel.SelectionFlag.Clear
+            | QtCore.QItemSelectionModel.SelectionFlag.SelectCurrent)
 
     def remove_selected_script(self):
         items = self.selectedItems()
@@ -87,8 +93,8 @@ class ScriptListWidget(QtWidgets.QListWidget):
         row = self.row(item)
         msg = _("Are you sure you want to remove this script?")
         reply = QtWidgets.QMessageBox.question(self, _('Confirm Remove'), msg,
-            QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No)
-        if item and reply == QtWidgets.QMessageBox.Yes:
+            QtWidgets.QMessageBox.StandardButton.Yes, QtWidgets.QMessageBox.StandardButton.No)
+        if item and reply == QtWidgets.QMessageBox.StandardButton.Yes:
             item = self.takeItem(row)
             del item
 
@@ -109,14 +115,15 @@ class ScriptListWidget(QtWidgets.QListWidget):
 class ScriptListWidgetItem(HashableListWidgetItem):
     """Holds a script's list and text widget properties"""
 
-    def __init__(self, name=None, enabled=True, script=""):
-        super().__init__(name)
-        self.setFlags(self.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEditable)
-        if name is None:
-            name = _(DEFAULT_SCRIPT_NAME)
-        self.setText(name)
-        self.setCheckState(QtCore.Qt.Checked if enabled else QtCore.Qt.Unchecked)
-        self.script = script
+    def __init__(self, script):
+        assert isinstance(script, TaggingScriptSetting)
+        super().__init__(script.name)
+        self.setFlags(self.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable | QtCore.Qt.ItemFlag.ItemIsEditable)
+        if not script.name:
+            script.name = gettext_constants(DEFAULT_SCRIPT_NAME)
+        self.setText(script.name)
+        self.setCheckState(QtCore.Qt.CheckState.Checked if script.enabled else QtCore.Qt.CheckState.Unchecked)
+        self._script = script
         self.has_error = False
 
     @property
@@ -129,8 +136,14 @@ class ScriptListWidgetItem(HashableListWidgetItem):
 
     @property
     def enabled(self):
-        return self.checkState() == QtCore.Qt.Checked
+        return self.checkState() == QtCore.Qt.CheckState.Checked
 
-    def get_all(self):
-        # tuples used to get pickle dump of settings to work
-        return (self.pos, self.name, self.enabled, self.script)
+    @property
+    def script(self):
+        return self._script
+
+    def get_script(self):
+        self._script.pos = self.pos
+        self._script.name = self.name
+        self._script.enabled = self.enabled
+        return self._script

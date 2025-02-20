@@ -5,13 +5,15 @@
 # Copyright (C) 2006 Lukáš Lalinský
 # Copyright (C) 2011-2014 Michael Wiencek
 # Copyright (C) 2012-2014, 2017, 2019 Wieland Hoffmann
-# Copyright (C) 2013-2014, 2018-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2018-2024 Laurent Monin
 # Copyright (C) 2014, 2017, 2020 Sophist-UK
 # Copyright (C) 2016 Rahul Raturi
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2017-2019 Antonio Larrosa
 # Copyright (C) 2018 Vishal Choudhary
-# Copyright (C) 2018-2021 Philipp Wolfer
+# Copyright (C) 2018-2024 Philipp Wolfer
+# Copyright (C) 2024 Giorgio Fontanive
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -32,11 +34,11 @@ from collections import (
     defaultdict,
     namedtuple,
 )
-import os.path
+from html import escape
 import re
 import traceback
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
@@ -44,20 +46,24 @@ from PyQt5 import (
 
 from picard import log
 from picard.album import Album
+from picard.config import get_config
 from picard.coverart.image import CoverArtImageIOError
+from picard.coverart.utils import translated_types_as_string
 from picard.file import File
+from picard.i18n import (
+    gettext as _,
+    ngettext,
+)
 from picard.track import Track
 from picard.util import (
     bytes2human,
-    encode_filename,
     format_time,
-    htmlescape,
-    union_sorted_lists,
+    open_local_path,
 )
 
 from picard.ui import PicardDialog
 from picard.ui.colors import interface_colors
-from picard.ui.ui_infodialog import Ui_InfoDialog
+from picard.ui.forms.ui_infodialog import Ui_InfoDialog
 from picard.ui.util import StandardButton
 
 
@@ -66,22 +72,24 @@ class ArtworkCoverWidget(QtWidgets.QWidget):
 
     SIZE = 170
 
-    def __init__(self, pixmap=None, text=None, parent=None):
+    def __init__(self, pixmap=None, text=None, size=None, parent=None):
         super().__init__(parent=parent)
         layout = QtWidgets.QVBoxLayout()
 
         if pixmap is not None:
+            if size is None:
+                size = self.SIZE
             image_label = QtWidgets.QLabel()
-            image_label.setPixmap(pixmap.scaled(self.SIZE, self.SIZE,
-                                                QtCore.Qt.KeepAspectRatio,
-                                                QtCore.Qt.SmoothTransformation))
-            image_label.setAlignment(QtCore.Qt.AlignCenter)
+            image_label.setPixmap(pixmap.scaled(size, size,
+                                                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                                QtCore.Qt.TransformationMode.SmoothTransformation))
+            image_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(image_label)
 
         if text is not None:
             text_label = QtWidgets.QLabel()
             text_label.setText(text)
-            text_label.setAlignment(QtCore.Qt.AlignCenter)
+            text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             text_label.setWordWrap(True)
             layout.addWidget(text_label)
 
@@ -89,63 +97,138 @@ class ArtworkCoverWidget(QtWidgets.QWidget):
 
 
 class ArtworkTable(QtWidgets.QTableWidget):
-    def __init__(self, display_existing_art):
-        super().__init__(0, 2)
-        self.display_existing_art = display_existing_art
+    H_SIZE = 200
+    V_SIZE = 230
+
+    NUM_ROWS = 0
+    NUM_COLS = 3
+
+    _columns = {}
+    _labels = ()
+    _tooltips = {}
+    artwork_columns = ()
+
+    def __init__(self, parent=None):
+        super().__init__(self.NUM_ROWS, self.NUM_COLS, parent=parent)
+
         h_header = self.horizontalHeader()
+        h_header.setDefaultSectionSize(self.H_SIZE)
+        h_header.setStretchLastSection(True)
+
         v_header = self.verticalHeader()
-        h_header.setDefaultSectionSize(200)
-        v_header.setDefaultSectionSize(230)
-        if self.display_existing_art:
-            self._existing_cover_col = 0
-            self._type_col = 1
-            self._new_cover_col = 2
-            self.insertColumn(2)
-            self.setHorizontalHeaderLabels([_("Existing Cover"), _("Type"),
-                                            _("New Cover")])
-        else:
-            self._type_col = 0
-            self._new_cover_col = 1
-            self.setHorizontalHeaderLabels([_("Type"), _("Cover")])
-            self.setColumnWidth(self._type_col, 140)
+        v_header.setDefaultSectionSize(self.V_SIZE)
+
+        self.setHorizontalHeaderLabels(self._labels)
+        for colname, index in self._columns.items():
+            self.horizontalHeaderItem(index).setToolTip(self._tooltips.get(colname, None))
+
+    def get_column_index(self, name):
+        return self._columns[name]
+
+
+class ArtworkTableSimple(ArtworkTable):
+    TYPE_COLUMN_SIZE = 140
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setColumnWidth(self.get_column_index('type'), self.TYPE_COLUMN_SIZE)
+
+
+class ArtworkTableNew(ArtworkTableSimple):
+    _columns = {
+        'type': 0,
+        'new': 1,
+        'external': 2,
+    }
+
+    artwork_columns = ('new', 'external',)
+    _labels = (_("Type"), _("New Embedded"), _("New Exported"),)
+    _tooltips = {
+        'new': _("New cover art embedded into tags"),
+        'external': _("New cover art saved as a separate file"),
+    }
+
+
+class ArtworkTableOriginal(ArtworkTableSimple):
+    NUM_COLS = 2
+
+    _columns = {
+        'type': 0,
+        'new': 1,
+    }
+
+    artwork_columns = ('new',)
+    _labels = (_("Type"), _("Existing Cover"))
+    _tooltips = {
+        'new': _("Existing cover art already embedded into tags"),
+    }
+
+
+class ArtworkTableExisting(ArtworkTable):
+    NUM_COLS = 4
+
+    _columns = {
+        'orig': 0,
+        'type': 1,
+        'new': 2,
+        'external': 3,
+    }
+
+    artwork_columns = ('orig', 'new', 'external',)
+    _labels = (_("Existing Cover"), _("Type"), _("New Embedded"), _("New Exported"),)
+    _tooltips = {
+        'orig': _("Existing cover art already embedded into tags"),
+        'new': _("New cover art embedded into tags"),
+        'external': _("New cover art saved as a separate file"),
+    }
+
+
+class ArtworkRow:
+    def __init__(self, orig_image=None, new_image=None, types=None):
+        self.orig_image = orig_image
+        self.new_image = new_image
+        self.types = types
+        self.new_external_image = None
+        if self.new_image:
+            self.new_external_image = self.new_image.external_file_coverart
 
 
 class InfoDialog(PicardDialog):
 
     def __init__(self, obj, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.obj = obj
-        self.images = []
-        self.existing_images = []
         self.ui = Ui_InfoDialog()
-        self.display_existing_artwork = False
+        self._pixmaps = {
+            'missing': QtGui.QPixmap(":/images/image-missing.png"),
+            'arrow': QtGui.QPixmap(":/images/arrow.png"),
+        }
 
-        if (isinstance(obj, File)
-                and isinstance(obj.parent, Track)
-                or isinstance(obj, Track)
-                or (isinstance(obj, Album) and obj.get_num_total_files() > 0)):
-            # Display existing artwork only if selected object is track object
-            # or linked to a track object or it's an album with files
-            if (getattr(obj, 'orig_metadata', None) is not None
-                    and obj.orig_metadata.images
-                    and obj.orig_metadata.images != obj.metadata.images):
-                self.display_existing_artwork = True
-                self.existing_images = obj.orig_metadata.images
+        self.new_images = sorted(obj.metadata.images) or []
+        self.orig_images = []
+        artworktable_class = ArtworkTableNew
 
-        if obj.metadata.images:
-            self.images = obj.metadata.images
-        if not self.images and self.existing_images:
-            self.images = self.existing_images
-            self.existing_images = []
-            self.display_existing_artwork = False
+        self.has_new_external_images = any(image.external_file_coverart for image in self.new_images)
+        has_orig_images = hasattr(obj, 'orig_metadata') and obj.orig_metadata.images
+        if has_orig_images:
+            artworktable_class = ArtworkTableOriginal
+            has_new_different_images = obj.orig_metadata.images != obj.metadata.images
+            if has_new_different_images or self.has_new_external_images:
+                is_track = isinstance(obj, Track)
+                is_linked_file = isinstance(obj, File) and isinstance(obj.parent_item, Track)
+                is_album_with_files = isinstance(obj, Album) and obj.get_num_total_files() > 0
+                if is_track or is_linked_file or is_album_with_files:
+                    self.orig_images = sorted(obj.orig_metadata.images)
+                    artworktable_class = ArtworkTableExisting
+
         self.ui.setupUi(self)
         self.ui.buttonBox.addButton(
-            StandardButton(StandardButton.CLOSE), QtWidgets.QDialogButtonBox.AcceptRole)
+            StandardButton(StandardButton.CLOSE), QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
         self.ui.buttonBox.accepted.connect(self.accept)
 
         # Add the ArtworkTable to the ui
-        self.ui.artwork_table = ArtworkTable(self.display_existing_artwork)
-        self.ui.artwork_table.setObjectName("artwork_table")
+        self.ui.artwork_table = artworktable_class(parent=self)
+        self.ui.artwork_table.setObjectName('artwork_table')
         self.ui.artwork_tab.layout().addWidget(self.ui.artwork_table)
         self.setTabOrder(self.ui.tabWidget, self.ui.artwork_table)
         self.setTabOrder(self.ui.artwork_table, self.ui.buttonBox)
@@ -167,30 +250,49 @@ class InfoDialog(PicardDialog):
 
     def _show_errors(self, errors):
         if errors:
-            color = interface_colors.get_color("log_error")
+            color = interface_colors.get_color('log_error')
             text = '<br />'.join(map(
                 lambda s: '<font color="%s">%s</font>' % (color, text_as_html(s)), errors))
             self.ui.error.setText(text + '<hr />')
 
-    def _display_artwork(self, images, col):
-        """Draw artwork in corresponding cell if image type matches type in Type column.
+    def _artwork_infos(self, image):
+        """Information about image, as list of strings"""
+        if image.comment:
+            yield image.comment
+        bytes_size_decimal = bytes2human.decimal(image.datalength)
+        bytes_size_binary = bytes2human.binary(image.datalength)
+        yield f"{bytes_size_decimal} ({bytes_size_binary})"
+        if image.width and image.height:
+            yield f"{image.width} x {image.height}"
+        yield image.mimetype
 
-        Arguments:
-        images -- The images to be drawn.
-        col -- Column in which images are to be drawn. Can be _new_cover_col or _existing_cover_col.
-        """
-        row = 0
-        row_count = self.artwork_table.rowCount()
-        for image in images:
-            while row != row_count:
-                image_type = self.artwork_table.item(row, self.artwork_table._type_col)
-                if image_type and image_type.data(QtCore.Qt.UserRole) == image.types_as_string():
-                    break
-                row += 1
-            if row == row_count:
-                continue
-            data = None
+    def _artwork_tooltip(self, message, image):
+        """Format rich-text tooltip text"""
+        fmt = _("<strong>%(message)s</strong><br />"
+                "Temporary file: <em>%(tempfile)s</em><br />"
+                "Source: <em>%(sourcefile)s</em>")
+        return fmt % {
+            'message': message,
+            'tempfile': escape(image.tempfile_filename),
+            'sourcefile': escape(image.source),
+        }
+
+    def _display_artwork_image_cell(self, row_index, colname):
+        """Display artwork image, depending on source (new/orig), in the proper column"""
+        col_index = self.artwork_table.get_column_index(colname)
+        pixmap = None
+        infos = None
+        source = 'orig_image'
+        if colname == 'new':
+            source = 'new_image'
+        elif colname == 'external':
+            source = 'new_external_image'
+        image = getattr(self.artwork_rows[row_index], source)
+        item = QtWidgets.QTableWidgetItem()
+
+        if image:
             try:
+                data = None
                 if image.thumbnail:
                     try:
                         data = image.thumbnail.data
@@ -198,62 +300,85 @@ class InfoDialog(PicardDialog):
                         log.warning(e)
                 else:
                     data = image.data
+                if data:
+                    pixmap = QtGui.QPixmap()
+                    pixmap.loadFromData(data)
+                    item.setToolTip(self._artwork_tooltip(_("Double-click to open in external viewer"), image))
+                    item.setData(QtCore.Qt.ItemDataRole.UserRole, image)
             except CoverArtImageIOError:
                 log.error(traceback.format_exc())
-                continue
-            item = QtWidgets.QTableWidgetItem()
-            item.setData(QtCore.Qt.UserRole, image)
-            pixmap = QtGui.QPixmap()
-            if data is not None:
-                pixmap.loadFromData(data)
-                item.setToolTip(
-                    _("Double-click to open in external viewer\n"
-                      "Temporary file: %s\n"
-                      "Source: %s") % (image.tempfile_filename, image.source))
-            infos = []
-            if image.comment:
-                infos.append(image.comment)
-            infos.append("%s (%s)" %
-                         (bytes2human.decimal(image.datalength),
-                          bytes2human.binary(image.datalength)))
-            if image.width and image.height:
-                infos.append("%d x %d" % (image.width, image.height))
-            infos.append(image.mimetype)
+                pixmap = self._pixmaps['missing']
+                item.setToolTip(self._artwork_tooltip(_("Missing temporary file"), image))
+            infos = "<br />".join(escape(t) for t in self._artwork_infos(image))
 
-            img_wgt = ArtworkCoverWidget(pixmap=pixmap, text="\n".join(infos))
-            self.artwork_table.setCellWidget(row, col, img_wgt)
-            self.artwork_table.setItem(row, col, item)
-            row += 1
+        img_wgt = ArtworkCoverWidget(pixmap=pixmap, text=infos)
+        self.artwork_table.setCellWidget(row_index, col_index, img_wgt)
+        self.artwork_table.setItem(row_index, col_index, item)
 
-    def _display_artwork_type(self):
-        """Display image type in Type column.
-        If both existing covers and new covers are to be displayed, take union of both cover types list.
-        """
-        types = [image.types_as_string() for image in self.images]
-        if self.display_existing_artwork:
-            existing_types = [image.types_as_string() for image in self.existing_images]
-            # Merge both types and existing types list in sorted order.
-            types = union_sorted_lists(types, existing_types)
-            pixmap_arrow = QtGui.QPixmap(":/images/arrow.png")
+    def _display_artwork_type_cell(self, row_index):
+        """Display type cell, with arrow if this row has both new & orig images"""
+        artwork_row = self.artwork_rows[row_index]
+        if artwork_row.new_image and artwork_row.orig_image:
+            type_pixmap = self._pixmaps['arrow']
+            type_size = ArtworkCoverWidget.SIZE // 2
         else:
-            pixmap_arrow = None
-        for row, artwork_type in enumerate(types):
-            self.artwork_table.insertRow(row)
-            item = QtWidgets.QTableWidgetItem()
-            item.setData(QtCore.Qt.UserRole, artwork_type)
-            type_wgt = ArtworkCoverWidget(pixmap=pixmap_arrow, text=artwork_type)
-            self.artwork_table.setCellWidget(row, self.artwork_table._type_col, type_wgt)
-            self.artwork_table.setItem(row, self.artwork_table._type_col, item)
+            type_pixmap = None
+            type_size = None
+
+        col_index = self.artwork_table.get_column_index('type')
+        type_item = QtWidgets.QTableWidgetItem()
+        type_wgt = ArtworkCoverWidget(
+            pixmap=type_pixmap,
+            size=type_size,
+            text=translated_types_as_string(artwork_row.types),
+        )
+        self.artwork_table.setCellWidget(row_index, col_index, type_wgt)
+        self.artwork_table.setItem(row_index, col_index, type_item)
+
+    def _build_artwork_rows(self):
+        """Generate artwork rows, trying to match orig/new image types"""
+        # we work on a copy, since will pop matched images
+        new_images = self.new_images[:]
+        if self.orig_images:
+            for orig_image in self.orig_images:
+                types = orig_image.normalized_types()
+                # let check if we can find a new image exactly matching this type
+                found_new_image = None
+                for i, new_image in enumerate(new_images):
+                    if new_image.normalized_types() == types:
+                        # we found one, pop it from new_images, we don't want to match it again
+                        found_new_image = new_images.pop(i)
+                        break
+                yield ArtworkRow(orig_image=orig_image, new_image=found_new_image, types=types)
+        # now, remaining images that weren't matched to orig images
+        for new_image in new_images:
+            yield ArtworkRow(new_image=new_image, types=new_image.normalized_types())
+
+    def _display_artwork_rows(self):
+        """Display rows of images and types in artwork tab"""
+        self.artwork_rows = dict(enumerate(self._build_artwork_rows()))
+        for row_index in self.artwork_rows:
+            self.artwork_table.insertRow(row_index)
+            self._display_artwork_type_cell(row_index)
+            for colname in self.artwork_table.artwork_columns:
+                self._display_artwork_image_cell(row_index, colname)
 
     def _display_artwork_tab(self):
-        if not self.images:
+        if not self.new_images and not self.orig_images:
             self.tab_hide(self.ui.artwork_tab)
-        self._display_artwork_type()
-        self._display_artwork(self.images, self.artwork_table._new_cover_col)
-        if self.existing_images:
-            self._display_artwork(self.existing_images, self.artwork_table._existing_cover_col)
+            return
+        self._display_artwork_rows()
         self.artwork_table.itemDoubleClicked.connect(self.show_item)
-        self.artwork_table.verticalHeader().resizeSections(QtWidgets.QHeaderView.ResizeToContents)
+        self.artwork_table.verticalHeader().resizeSections(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        if isinstance(self.artwork_table, ArtworkTableOriginal):
+            return
+        config = get_config()
+        for colname in self.artwork_table.artwork_columns:
+            tags_image_not_used = colname == 'new' and not config.setting['save_images_to_tags']
+            file_image_not_used = colname == 'external' and not self.has_new_external_images
+            if tags_image_not_used or file_image_not_used:
+                col_index = self.artwork_table.get_column_index(colname)
+                self.artwork_table.setColumnHidden(col_index, True)
 
     def tab_hide(self, widget):
         tab = self.ui.tabWidget
@@ -261,53 +386,50 @@ class InfoDialog(PicardDialog):
         tab.removeTab(index)
 
     def show_item(self, item):
-        data = item.data(QtCore.Qt.UserRole)
+        data = item.data(QtCore.Qt.ItemDataRole.UserRole)
         # Check if this function isn't triggered by cell in Type column
-        if isinstance(data, str):
+        if not data:
             return
         filename = data.tempfile_filename
         if filename:
-            url = QtCore.QUrl.fromLocalFile(filename)
-            QtGui.QDesktopServices.openUrl(url)
+            open_local_path(filename)
 
 
 def format_file_info(file_):
     info = []
-    info.append((_('Filename:'), file_.filename))
+    info.append((_("Filename:"), file_.filename))
     if '~format' in file_.orig_metadata:
-        info.append((_('Format:'), file_.orig_metadata['~format']))
-    try:
-        size = os.path.getsize(encode_filename(file_.filename))
-        sizestr = "%s (%s)" % (bytes2human.decimal(size), bytes2human.binary(size))
-        info.append((_('Size:'), sizestr))
-    except BaseException:
-        pass
+        info.append((_("Format:"), file_.orig_metadata['~format']))
+    if '~filesize' in file_.orig_metadata:
+        size = file_.orig_metadata['~filesize']
+        try:
+            sizestr = "%s (%s)" % (bytes2human.decimal(size), bytes2human.binary(size))
+        except ValueError:
+            sizestr = _("unknown")
+        info.append((_("Size:"), sizestr))
     if file_.orig_metadata.length:
-        info.append((_('Length:'), format_time(file_.orig_metadata.length)))
+        info.append((_("Length:"), format_time(file_.orig_metadata.length)))
     if '~bitrate' in file_.orig_metadata:
-        info.append((_('Bitrate:'), '%s kbps' % file_.orig_metadata['~bitrate']))
+        info.append((_("Bitrate:"), "%s kbps" % file_.orig_metadata['~bitrate']))
     if '~sample_rate' in file_.orig_metadata:
-        info.append((_('Sample rate:'), '%s Hz' % file_.orig_metadata['~sample_rate']))
+        info.append((_("Sample rate:"), "%s Hz" % file_.orig_metadata['~sample_rate']))
     if '~bits_per_sample' in file_.orig_metadata:
-        info.append((_('Bits per sample:'), str(file_.orig_metadata['~bits_per_sample'])))
+        info.append((_("Bits per sample:"), str(file_.orig_metadata['~bits_per_sample'])))
     if '~channels' in file_.orig_metadata:
         ch = file_.orig_metadata['~channels']
         if ch == '1':
-            ch = _('Mono')
+            ch = _("Mono")
         elif ch == '2':
-            ch = _('Stereo')
-        info.append((_('Channels:'), ch))
+            ch = _("Stereo")
+        info.append((_("Channels:"), ch))
     return '<br/>'.join(map(lambda i: '<b>%s</b> %s' %
-                            (htmlescape(i[0]),
-                             htmlescape(i[1])), info))
+                            (escape(i[0]), escape(i[1])), info))
 
 
 def format_tracklist(cluster):
     info = []
-    info.append("<b>%s</b> %s" % (_('Album:'),
-                                  htmlescape(cluster.metadata["album"])))
-    info.append("<b>%s</b> %s" % (_('Artist:'),
-                                  htmlescape(cluster.metadata["albumartist"])))
+    info.append('<b>%s</b> %s' % (_("Album:"), escape(cluster.metadata['album'])))
+    info.append('<b>%s</b> %s' % (_("Artist:"), escape(cluster.metadata['albumartist'])))
     info.append("")
     TrackListItem = namedtuple('TrackListItem', 'number, title, artist, length')
     tracklists = defaultdict(list)
@@ -317,9 +439,9 @@ def format_tracklist(cluster):
         objlist = cluster.iterfiles(False)
     for obj_ in objlist:
         m = obj_.metadata
-        artist = m["artist"] or m["albumartist"] or cluster.metadata["albumartist"]
-        track = TrackListItem(m["tracknumber"], m["title"], artist,
-                              m["~length"])
+        artist = m['artist'] or m['albumartist'] or cluster.metadata['albumartist']
+        track = TrackListItem(m['tracknumber'], m['title'], artist,
+                              m['~length'])
         tracklists[obj_.discnumber].append(track)
 
     def sorttracknum(track):
@@ -337,15 +459,15 @@ def format_tracklist(cluster):
     for discnumber in sorted(tracklists):
         tracklist = tracklists[discnumber]
         if ndiscs > 1:
-            info.append("<b>%s</b>" % (_('Disc %d') % discnumber))
-        lines = ["%s %s - %s (%s)" % item for item in sorted(tracklist, key=sorttracknum)]
-        info.append("<b>%s</b><br />%s<br />" % (_('Tracklist:'),
-                    '<br />'.join(htmlescape(s).replace(' ', '&nbsp;') for s in lines)))
+            info.append('<b>%s</b>' % (_("Disc %d") % discnumber))
+        lines = ['%s %s - %s (%s)' % item for item in sorted(tracklist, key=sorttracknum)]
+        info.append('<b>%s</b><br />%s<br />' % (_("Tracklist:"),
+                    '<br />'.join(escape(s).replace(' ', '&nbsp;') for s in lines)))
     return '<br/>'.join(info)
 
 
 def text_as_html(text):
-    return '<br />'.join(htmlescape(str(text))
+    return '<br />'.join(escape(str(text))
         .replace('\t', ' ')
         .replace(' ', '&nbsp;')
         .splitlines())
@@ -354,7 +476,7 @@ def text_as_html(text):
 class FileInfoDialog(InfoDialog):
 
     def __init__(self, file_, parent=None):
-        super().__init__(file_, parent)
+        super().__init__(file_, parent=parent)
         self.setWindowTitle(_("Info") + " - " + file_.base_filename)
 
     def _display_info_tab(self):
@@ -366,7 +488,7 @@ class FileInfoDialog(InfoDialog):
 class AlbumInfoDialog(InfoDialog):
 
     def __init__(self, album, parent=None):
-        super().__init__(album, parent)
+        super().__init__(album, parent=parent)
         self.setWindowTitle(_("Album Info"))
 
     def _display_info_tab(self):
@@ -380,7 +502,7 @@ class AlbumInfoDialog(InfoDialog):
 class TrackInfoDialog(InfoDialog):
 
     def __init__(self, track, parent=None):
-        super().__init__(track, parent)
+        super().__init__(track, parent=parent)
         self.setWindowTitle(_("Track Info"))
 
     def _display_info_tab(self):
@@ -404,7 +526,7 @@ class TrackInfoDialog(InfoDialog):
 class ClusterInfoDialog(InfoDialog):
 
     def __init__(self, cluster, parent=None):
-        super().__init__(cluster, parent)
+        super().__init__(cluster, parent=parent)
         self.setWindowTitle(_("Cluster Info"))
 
     def _display_info_tab(self):

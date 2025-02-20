@@ -3,10 +3,10 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2014, 2017 Sophist-UK
-# Copyright (C) 2015, 2018, 2020 Laurent Monin
+# Copyright (C) 2015, 2018, 2020-2022 Laurent Monin
 # Copyright (C) 2017 Ville Skyttä
 # Copyright (C) 2018 Wieland Hoffmann
-# Copyright (C) 2018-2019, 2021 Philipp Wolfer
+# Copyright (C) 2018-2019, 2021, 2023 Philipp Wolfer
 # Copyright (C) 2020 Undearius
 #
 # This program is free software; you can redistribute it and/or
@@ -191,6 +191,8 @@ class AsciiPunctTest(PicardTestCase):
         self.assertEqual(util.textencoding.asciipunct("“Test”"), "\"Test\"")  # Quotations
         self.assertEqual(util.textencoding.asciipunct("1′6″"), "1'6\"")  # Quotations
         self.assertEqual(util.textencoding.asciipunct("…"), "...")  # Ellipses
+        self.assertEqual(util.textencoding.asciipunct("\u2024"), ".")  # ONE DOT LEADER
+        self.assertEqual(util.textencoding.asciipunct("\u2025"), "..")  # TWO DOT LEADER
 
     def test_incorrect(self):
         pass

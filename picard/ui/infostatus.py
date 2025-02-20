@@ -2,9 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2013, 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2013, 2018, 2020-2024 Laurent Monin
 # Copyright (C) 2016-2017 Sambhav Kothari
-# Copyright (C) 2019, 2021 Philipp Wolfer
+# Copyright (C) 2019, 2021-2022 Philipp Wolfer
 # Copyright (C) 2021 Gabriel Ferreira
 #
 # This program is free software; you can redistribute it and/or
@@ -24,22 +24,23 @@
 
 import time
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
 
+from picard.i18n import gettext as _
 from picard.util import icontheme
 from picard.util.time import get_timestamp
 
-from picard.ui.ui_infostatus import Ui_InfoStatus
+from picard.ui.forms.ui_infostatus import Ui_InfoStatus
 
 
 class InfoStatus(QtWidgets.QWidget, Ui_InfoStatus):
 
-    def __init__(self, parent):
-        QtWidgets.QWidget.__init__(self, parent)
+    def __init__(self, parent=None):
+        QtWidgets.QWidget.__init__(self, parent=parent)
         Ui_InfoStatus.__init__(self)
         self.setupUi(self)
 
@@ -56,11 +57,11 @@ class InfoStatus(QtWidgets.QWidget, Ui_InfoStatus):
         self.label2.setPixmap(self.icon_file.pixmap(size))
         self.label3.setPixmap(self.icon_cd.pixmap(size))
         self.label4.setPixmap(self.icon_file_pending.pixmap(size))
-        self.label5.setPixmap(self.icon_download.pixmap(size, QtGui.QIcon.Disabled))
+        self.label5.setPixmap(self.icon_download.pixmap(size, QtGui.QIcon.Mode.Disabled))
         self._init_tooltips()
 
     def _create_icons(self):
-        self.icon_eta = QtGui.QIcon(':/images/22x22/hourglass.png')
+        self.icon_eta = QtGui.QIcon(":/images/22x22/hourglass.png")
         self.icon_cd = icontheme.lookup('media-optical')
         self.icon_file = QtGui.QIcon(":/images/file.png")
         self.icon_file_pending = QtGui.QIcon(":/images/file-pending.png")
@@ -83,29 +84,27 @@ class InfoStatus(QtWidgets.QWidget, Ui_InfoStatus):
         self.val5.setToolTip(t5)
         self.label5.setToolTip(t5)
 
-    def update(self, files=0, albums=0, pending_files=0, pending_requests=0, progress=0):
-        self.set_files(files)
-        self.set_albums(albums)
-        self.set_pending_files(pending_files)
-        self.set_pending_requests(pending_requests)
+    def update(self, progress_status):
+        self.set_files(progress_status.files)
+        self.set_albums(progress_status.albums)
+        self.set_pending_files(progress_status.pending_files)
+        self.set_pending_requests(progress_status.pending_requests)
 
         # estimate eta
-        total_pending = pending_files + pending_requests
+        total_pending = progress_status.pending_files + progress_status.pending_requests
         last_pending = self._last_pending_files + self._last_pending_requests
 
-        if self._max_pending_files == 0 or (self._max_pending_files > 0
-                                            and self._last_pending_files == 0
-                                            and pending_files == 0):
-            # update starting timestamp when pending_files appear in order to discard the idle time
-            # and when all previous file requests already finished but network requests still ongoing
-            self.reset_file_counters()
+        # Reset the counters if we had no pending progress before and receive new pending items.
+        # This resets the starting timestamp and starts a new round of measurement.
+        if total_pending > 0 and last_pending == 0:
+            self.reset_counters()
 
         previous_done_files = max(0, self._max_pending_files - self._last_pending_files)
         previous_done_requests = max(0, self._max_pending_requests - self._last_pending_requests)
-        self._max_pending_files = max(self._max_pending_files, previous_done_files + pending_files)
-        self._max_pending_requests = max(self._max_pending_requests, previous_done_requests + pending_requests)
-        self._last_pending_files = pending_files
-        self._last_pending_requests = pending_requests
+        self._max_pending_files = max(self._max_pending_files, previous_done_files + progress_status.pending_files)
+        self._max_pending_requests = max(self._max_pending_requests, previous_done_requests + progress_status.pending_requests)
+        self._last_pending_files = progress_status.pending_files
+        self._last_pending_requests = progress_status.pending_requests
 
         if total_pending == 0 or (self._max_pending_files + self._max_pending_requests <= 1):
             self.reset_counters()
@@ -120,11 +119,11 @@ class InfoStatus(QtWidgets.QWidget, Ui_InfoStatus):
             previous_done_files = max(1, previous_done_files)  # denominator can't be 0
 
             # we estimate based on the time per file * number of pending files + 1 second per additional request
-            file_eta_seconds = (diff_time / previous_done_files) * pending_files + pending_requests
+            file_eta_seconds = (diff_time / previous_done_files) * progress_status.pending_files + progress_status.pending_requests
 
             # we assume additional network requests based on the ratio of requests/files * pending files
             # to estimate an upper bound (e.g. fetch cover, lookup, scan)
-            network_eta_seconds = pending_requests + (previous_done_requests / previous_done_files) * pending_files
+            network_eta_seconds = progress_status.pending_requests + (previous_done_requests / previous_done_files) * progress_status.pending_files
 
             # general eta (biased towards whatever takes longer)
             eta_seconds = max(network_eta_seconds, file_eta_seconds)
@@ -137,9 +136,6 @@ class InfoStatus(QtWidgets.QWidget, Ui_InfoStatus):
         self._last_progress = 0
         self._max_pending_requests = 0
         self._last_pending_requests = 0
-        self.reset_file_counters()
-
-    def reset_file_counters(self):
         self._max_pending_files = 0
         self._last_pending_files = 0
         self._prev_time = time.time()
@@ -170,8 +166,8 @@ class InfoStatus(QtWidgets.QWidget, Ui_InfoStatus):
 
     def set_pending_requests(self, num):
         if num <= 0:
-            enabled = QtGui.QIcon.Disabled
+            enabled = QtGui.QIcon.Mode.Disabled
         else:
-            enabled = QtGui.QIcon.Normal
+            enabled = QtGui.QIcon.Mode.Normal
         self.label5.setPixmap(self.icon_download.pixmap(self._size, enabled))
         self.val5.setText(str(num))

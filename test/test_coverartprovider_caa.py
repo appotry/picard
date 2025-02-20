@@ -2,8 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2020 Laurent Monin
-# Copyright (C) 2020 Philipp Wolfer
+# Copyright (C) 2020-2021 Philipp Wolfer
+# Copyright (C) 2020-2022 Laurent Monin
+# Copyright (C) 2024 Giorgio Fontanive
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -32,7 +33,7 @@ class CoverArtImageProviderCaaTest(PicardTestCase):
             thumbnails = {size: "url %s" % size for size in sizes}
             msgfmt = "for size %s, with sizes %r, got %r, expected %r"
             for size, expect in expectations.items():
-                result = caa_url_fallback_list(size, thumbnails)
+                result = [thumbnail.url for thumbnail in caa_url_fallback_list(size, thumbnails)]
                 self.assertEqual(result, expect, msg=msgfmt % (size, sizes, result, expect))
 
         # For historical reasons, caa web service returns 2 identical urls,

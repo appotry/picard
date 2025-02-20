@@ -4,6 +4,7 @@
 #
 # Copyright (C) 2014, 2020 Laurent Monin
 # Copyright (C) 2021 Philipp Wolfer
+# Copyright (C) 2024 Giorgio Fontanive
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -36,7 +37,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/gif', '.gif', 5806)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/gif',
+                    extension='.gif',
+                    datalen=5806
+                )
             )
 
     def test_png(self):
@@ -45,7 +52,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/png', '.png', 11137)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/png',
+                    extension='.png',
+                    datalen=11137
+                )
             )
 
     def test_jpeg(self):
@@ -54,7 +67,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/jpeg', '.jpg', 8550)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/jpeg',
+                    extension='.jpg',
+                    datalen=8550
+                )
             )
 
     def test_webp_vp8(self):
@@ -63,7 +82,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/webp', '.webp', 6178)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/webp',
+                    extension='.webp',
+                    datalen=6178
+                )
             )
 
     def test_webp_vp8l(self):
@@ -72,7 +97,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/webp', '.webp', 9432)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/webp',
+                    extension='.webp',
+                    datalen=9432
+                )
             )
 
     def test_webp_vp8x(self):
@@ -81,7 +112,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/webp', '.webp', 6858)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/webp',
+                    extension='.webp',
+                    datalen=6858
+                )
             )
 
     def test_webp_insufficient_data(self):
@@ -94,7 +131,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (140, 96, 'image/tiff', '.tiff', 12509)
+                imageinfo.ImageInfo(
+                    width=140,
+                    height=96,
+                    mime='image/tiff',
+                    extension='.tiff',
+                    datalen=12509
+                )
             )
 
     def test_pdf(self):
@@ -103,7 +146,13 @@ class IdentifyTest(PicardTestCase):
         with open(file, 'rb') as f:
             self.assertEqual(
                 imageinfo.identify(f.read()),
-                (0, 0, 'application/pdf', '.pdf', 10362)
+                imageinfo.ImageInfo(
+                    width=0,
+                    height=0,
+                    mime='application/pdf',
+                    extension='.pdf',
+                    datalen=10362
+                )
             )
 
     def test_not_enough_data(self):

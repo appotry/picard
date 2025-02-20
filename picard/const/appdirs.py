@@ -2,7 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2021 Philipp Wolfer
+# Copyright (C) 2021-2022 Philipp Wolfer
+# Copyright (C) 2021-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,7 +23,7 @@
 import os
 import os.path
 
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     QCoreApplication,
     QStandardPaths,
 )
@@ -39,14 +40,14 @@ QCoreApplication.setOrganizationName(PICARD_ORG_NAME)
 
 
 def config_folder():
-    return os.path.normpath(os.environ.get('PICARD_CONFIG_DIR', QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)))
+    return os.path.normpath(os.environ.get('PICARD_CONFIG_DIR', QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)))
 
 
 def cache_folder():
-    return os.path.normpath(os.environ.get('PICARD_CACHE_DIR', QStandardPaths.writableLocation(QStandardPaths.CacheLocation)))
+    return os.path.normpath(os.environ.get('PICARD_CACHE_DIR', QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)))
 
 
 def plugin_folder():
-    # FIXME: This really should be in QStandardPaths.AppDataLocation instead,
+    # FIXME: This really should be in QStandardPaths.StandardLocation.AppDataLocation instead,
     # but this is a breaking change that requires data migration
     return os.path.normpath(os.environ.get('PICARD_PLUGIN_DIR', os.path.join(config_folder(), 'plugins')))

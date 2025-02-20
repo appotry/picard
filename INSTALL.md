@@ -8,34 +8,36 @@ Before installing Picard from source, you need to check you have the following d
 
 Required:
 
-* [Python 3.6 or newer](http://python.org/download)
-* [PyQt 5.10 or newer](http://www.riverbankcomputing.co.uk/software/pyqt/download)
+* [Python 3.9 or newer](https://www.python.org/downloads/)
+* [PyQt 6.5 or newer](https://riverbankcomputing.com/software/pyqt/download)
 * [Mutagen 1.37 or newer](https://mutagen.readthedocs.io/)
 * [PyYAML 5.1 or newer](https://pyyaml.org/)
 * [python-dateutil](https://dateutil.readthedocs.io/en/stable/)
 * gettext:
   * [Windows](https://mlocati.github.io/articles/gettext-iconv-windows.html)
 * a compiler
-  * Windows should work with [Visual C++ 2008 Express](http://go.microsoft.com/?linkid=7729279)
+  * Windows should work with [Visual Studio Community 2019](https://aka.ms/vs/16/release/vs_community.exe)
 
 Optional but recommended:
 
-* [chromaprint](http://acoustid.org/chromaprint)
+* [chromaprint](https://acoustid.org/chromaprint)
   * Required for fingerprinting (scanning) files
 * [python-discid](https://python-discid.readthedocs.org/) or [python-libdiscid](https://pypi.org/project/python-libdiscid/)
   * Required for CD lookups.
-  * Depends on [libdiscid](http://musicbrainz.org/doc/libdiscid)
+  * Depends on [libdiscid](https://musicbrainz.org/doc/libdiscid)
    Note: Due to slowdowns in reading the CD TOC, using libdiscid versions
    0.3.0 - 0.4.1 is not recommended.
 * [python-markdown](https://python-markdown.github.io/install/)
   * Required for the complete scripting documentation
 * [PyJWT 1.7 or newer](https://pyjwt.readthedocs.io/)
   * Required for the add cluster as release / add file as recording functionality
+* [charset_normalizer](https://pypi.org/project/charset-normalizer/) or [chardet](https://pypi.org/project/chardet/)
+  * Required for character encoding detection in CD ripping log files
 
 We recommend you use [pip](https://pip.pypa.io/en/stable/) to install the Python
 dependencies:
 
-Run the following command to install PyQt5, Mutagen and discid:
+Run the following command to install PyQt6, Mutagen and discid:
 
     pip3 install -r requirements.txt
 
@@ -58,6 +60,23 @@ To start Picard now you can use:
 To uninstall Picard run:
 
     pip3 uninstall picard
+
+
+Note about Qt6 installed via pip
+--------------------------------
+
+If you get errors related to `libxcb` on application startup, you may need to install extra libraries on your system.
+
+Typical error looks like:
+
+    qt.qpa.plugin: From 6.5.0, xcb-cursor0 or libxcb-cursor0 is needed to load the Qt xcb platform plugin.
+    qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.
+    This application failed to start because no Qt platform plugin could be initialized. Reinstalling the application may fix this problem.
+
+
+In this case, you have to install extra packages system-wide, for example, in this case, on Ubuntu:
+
+    sudo apt install libxcb-cursor0
 
 
 Installation using setup.py
@@ -90,8 +109,41 @@ To uninstall Picard again simply remove all the files listed in
 Running From the Source Tree
 ----------------------------
 
-If you want to run Picard from the source directory without installing, you
-need to build the C extensions and locales manually:
+If you want to run Picard from the source directory without installing,
+or want to develop, you need to follow those steps.
+
+On Debian-based systems:
+
+    apt install python3-pyqt6 python3-venv python3-dev
+
+For discid support (optional):
+
+    apt install libdiscid0
+
+For embedded multimedia player support (optional):
+
+    apt install python3-pyqt6.qtmultimedia libqt6multimedia6
+
+For other distributions, check your distribution's documentation
+on how to install the packages for Qt6, PyQt6, Python3 C headers,
+and Python3 venv.
+
+At top of source directory, create a .venv directory:
+
+    python3 -m venv --system-site-packages .venv
+
+Activate it:
+
+    . .venv/bin/activate
+
+Install requirements (here we also install build & dev requirements):
+
+    pip install -r requirements.txt -r requirements-build.txt -r requirements-dev.txt
+
+You then need to build the C extensions and locales manually.
+C extension will require header file `Python.h`.
+
+Then you can build Picard dependencies:
 
     python3 setup.py build
     python3 setup.py build_ext -i
@@ -100,6 +152,10 @@ need to build the C extensions and locales manually:
 And to start Picard use:
 
     python3 tagger.py
+
+Or, to enable debug mode:
+
+    python3 tagger.py -d
 
 
 Running the Test Suite
@@ -110,6 +166,7 @@ the Source Tree".  Afterward you can run the tests using setup.py:
 
     python3 setup.py test
 
+
 Packaging
 ---------
 
@@ -119,3 +176,32 @@ To submit a package run:
 
     python3 setup.py sdist
     twine upload dist/*
+
+
+Code Signatures
+---------------
+
+The official software packages of MusicBrainz Picard for macOS and Windows as
+well as the official source archives are all digitally signed.
+
+If you are packaging Picard for an operating system (e.g. a Linux distribution)
+we recommend that you use the source archives from the
+[official file server](https://data.musicbrainz.org/pub/musicbrainz/picard/).
+The source archives are named `picard-x.y.z.tar.gz` and there is a corresponding
+GPG signature file `picard-x.y.z.tar.gz.asc` signed with the GPG key listed
+below.
+
+You can verify the signature with e.g.:
+
+    gpg --verify picard-2.9.tar.gz.asc
+
+Make sure the key fingerprint in the output matches the fingerprint of the
+GPG key below.
+
+The signing certificates and keys currently in use are:
+
+| Certificate          | Expiration | Fingerprint                              |
+|----------------------|------------|------------------------------------------|
+| Windows Code Signing | 2024-10-25 | 4d0c868847e2a5e44ae734e1279a9c7007fd6d4c |
+| Apple Code Signing   | 2027-02-01 | deb351206f7dc9361e1cf3d864edce98a8d3302d |
+| MBP Developers GPG   | 2026-10-28 | [68990dd0b1edc129b856958167997e14d563da7c](https://keyserver.ubuntu.com/pks/lookup?op=vindex&search=0x67997e14d563da7c) |

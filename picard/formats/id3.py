@@ -3,19 +3,22 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006-2009, 2011-2012 Lukáš Lalinský
-# Copyright (C) 2008-2011, 2014, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008-2011, 2014, 2018-2021, 2023 Philipp Wolfer
 # Copyright (C) 2009 Carlin Mangar
 # Copyright (C) 2011-2012 Johannes Weißl
 # Copyright (C) 2011-2014 Michael Wiencek
 # Copyright (C) 2011-2014 Wieland Hoffmann
 # Copyright (C) 2013 Calvin Walton
-# Copyright (C) 2013-2014, 2017-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2017-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2013-2015, 2017, 2021 Sophist-UK
 # Copyright (C) 2015 Frederik “Freso” S. Olesen
 # Copyright (C) 2016 Christoph Reiter
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2017 tungol
 # Copyright (C) 2019 Zenara Daley
+# Copyright (C) 2023 certuna
+# Copyright (C) 2024 Giorgio Fontanive
+# Copyright (C) 2024 YohayAiTe
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -61,8 +64,24 @@ from picard.util import (
     encode_filename,
     sanitize_date,
 )
-from picard.util.tags import parse_comment_tag
+from picard.util.tags import (
+    parse_comment_tag,
+    parse_subtag,
+)
 
+
+try:
+    from itertools import batched
+except ImportError:
+    # itertools.batched is only available in Python >= 3.12
+    from itertools import islice
+
+    def batched(iterable, n):
+        if n < 1:
+            raise ValueError('n must be at least one')
+        it = iter(iterable)
+        while batch := tuple(islice(it, n)):
+            yield batch
 
 UNSUPPORTED_TAGS = {'r128_album_gain', 'r128_track_gain'}
 
@@ -88,7 +107,7 @@ def id3text(text, encoding):
     """
 
     if encoding == Id3Encoding.LATIN1:
-        return text.encode("latin1", "replace").decode("latin1")
+        return text.encode('latin1', 'replace').decode('latin1')
     return text
 
 
@@ -110,6 +129,7 @@ class ID3File(File):
         'TXXX:ALBUMARTISTSORT': 'TSO2',
         'TXXX:COMPOSERSORT': 'TSOC',
         'TXXX:mood': 'TMOO',
+        'TXXX:RELEASEDATE': 'TDRL',
     }
 
     __translate = {
@@ -137,6 +157,7 @@ class ID3File(File):
         'TPUB': 'label',
         'TDOR': 'originaldate',
         'TDRC': 'date',
+        'TDRL': 'releasedate',
         'TSSE': 'encodersettings',
         'TSOA': 'albumsort',
         'TSOP': 'artistsort',
@@ -217,14 +238,19 @@ class ID3File(File):
     }
     _rtipl_roles = {v: k for k, v in _tipl_roles.items()}
 
-    __other_supported_tags = ("discnumber", "tracknumber",
-                              "totaldiscs", "totaltracks",
-                              "movementnumber", "movementtotal")
+    __other_supported_tags = ('discnumber', 'tracknumber',
+                              'totaldiscs', 'totaltracks',
+                              'movementnumber', 'movementtotal')
     __tag_re_parse = {
         'TRCK': re.compile(r'^(?P<tracknumber>\d+)(?:/(?P<totaltracks>\d+))?$'),
         'TPOS': re.compile(r'^(?P<discnumber>\d+)(?:/(?P<totaldiscs>\d+))?$'),
         'MVIN': re.compile(r'^(?P<movementnumber>\d+)(?:/(?P<movementtotal>\d+))?$')
     }
+
+    __lrc_time_format_re = r'\d+:\d{1,2}(?:.\d+)?'
+    __lrc_line_re_parse = re.compile(r'(\[' + __lrc_time_format_re + r'\])')
+    __lrc_syllable_re_parse = re.compile(r'(<' + __lrc_time_format_re + r'>)')
+    __lrc_both_re_parse = re.compile(r'(\[' + __lrc_time_format_re + r'\]|<' + __lrc_time_format_re + r'>)')
 
     def __init__(self, filename):
         super().__init__(filename)
@@ -259,7 +285,7 @@ class ID3File(File):
             frameid = frame.FrameID
             if frameid in self.__translate:
                 name = self.__translate[frameid]
-                if frameid.startswith('T') or frameid in {"GRP1", "MVNM"}:
+                if frameid.startswith('T') or frameid in {'GRP1', 'MVNM'}:
                     for text in frame.text:
                         if text:
                             metadata.add(name, text)
@@ -278,7 +304,7 @@ class ID3File(File):
                 for text in frame.text:
                     if text:
                         metadata.add(name, text)
-            elif frameid == "TMCL":
+            elif frameid == 'TMCL':
                 for role, name in frame.people:
                     if role == 'performer':
                         role = ''
@@ -286,7 +312,7 @@ class ID3File(File):
                         metadata.add('performer:%s' % role, name)
                     else:
                         metadata.add('performer', name)
-            elif frameid == "TIPL":
+            elif frameid == 'TIPL':
                 # If file is ID3v2.3, TIPL tag could contain TMCL
                 # so we will test for TMCL values and add to TIPL if not TMCL
                 for role, name in frame.people:
@@ -327,7 +353,20 @@ class ID3File(File):
                 if frame.desc:
                     name += ':%s' % frame.desc
                 metadata.add(name, frame.text)
-            elif frameid == 'UFID' and frame.owner == 'http://musicbrainz.org':
+            elif frameid == 'SYLT' and frame.type == 1:
+                if frame.format != 2:
+                    log.warning("Unsupported SYLT format %d in %r, only 2 is supported", frame.format, filename)
+                    continue
+                name = 'syncedlyrics'
+                if frame.lang:
+                    name += ':%s' % frame.lang
+                    if frame.desc:
+                        name += ':%s' % frame.desc
+                elif frame.desc:
+                    name += '::%s' % frame.desc
+                lrc_lyrics = self._parse_sylt_text(frame.text, file.info.length)
+                metadata.add(name, lrc_lyrics)
+            elif frameid == 'UFID' and frame.owner == "http://musicbrainz.org":
                 metadata['musicbrainz_recordingid'] = frame.data.decode('ascii', 'ignore')
             elif frameid in self.__tag_re_parse.keys():
                 m = self.__tag_re_parse[frameid].search(frame.text[0])
@@ -349,7 +388,7 @@ class ID3File(File):
                         id3_type=frame.type,
                     )
                 except CoverArtImageError as e:
-                    log.error('Cannot load image from %r: %s' % (filename, e))
+                    log.error("Cannot load image from %r: %s", filename, e)
                 else:
                     metadata.images.append(coverartimage)
             elif frameid == 'POPM':
@@ -372,7 +411,7 @@ class ID3File(File):
         tags = self._get_tags(filename)
         config = get_config()
         if config.setting['clear_existing_tags']:
-            cover = tags.getall('APIC') if config.setting["preserve_images"] else None
+            cover = tags.getall('APIC') if config.setting['preserve_images'] else None
             tags.clear()
             if cover:
                 tags.setall('APIC', cover)
@@ -456,11 +495,18 @@ class ID3File(File):
                     desc = ''
                 for value in values:
                     tags.add(id3.USLT(encoding=encoding, desc=desc, text=value))
+            elif name == 'syncedlyrics' or name.startswith('syncedlyrics:'):
+                (lang, desc) = parse_subtag(name)
+                for value in values:
+                    sylt_lyrics = self._parse_lrc_text(value)
+                    # If the text does not contain any timestamps, the tag is not added
+                    if sylt_lyrics:
+                        tags.add(id3.SYLT(encoding=encoding, lang=lang, format=2, type=1, desc=desc, text=sylt_lyrics))
             elif name in self._rtipl_roles:
                 for value in values:
                     tipl.people.append([self._rtipl_roles[name], value])
             elif name == 'musicbrainz_recordingid':
-                tags.add(id3.UFID(owner='http://musicbrainz.org', data=bytes(values[0], 'ascii')))
+                tags.add(id3.UFID(owner="http://musicbrainz.org", data=bytes(values[0], 'ascii')))
             elif name == '~rating':
                 rating_user_email = id3text(config.setting['rating_user_email'], Id3Encoding.LATIN1)
                 # Search for an existing POPM frame to get the current playcount
@@ -505,6 +551,8 @@ class ID3File(File):
                             tags.add(self.build_TXXX(encoding, 'mood', values))
                     # No need to care about the TMOO tag being added again as it is
                     # automatically deleted by Mutagen if id2v23 is selected
+                        if frameid == 'TDRL':
+                            tags.add(self.build_TXXX(encoding, 'RELEASEDATE', values))
                     tags.add(getattr(id3, frameid)(encoding=encoding, text=values))
                     if frameid == 'TSOA':
                         tags.delall('XSOA')
@@ -533,7 +581,7 @@ class ID3File(File):
                     if frameclass:
                         tags.add(frameclass(encoding=encoding, text=values))
             # don't save private / already stored tags
-            elif not name.startswith("~") and name not in self.__other_supported_tags:
+            elif not name.startswith('~') and name not in self.__other_supported_tags:
                 tags.add(self.build_TXXX(encoding, name, values))
 
         if tmcl.people:
@@ -545,7 +593,7 @@ class ID3File(File):
 
         self._save_tags(tags, encode_filename(filename))
 
-        if self._IsMP3 and config.setting["remove_ape_from_mp3"]:
+        if self._IsMP3 and config.setting['remove_ape_from_mp3']:
             try:
                 mutagen.apev2.delete(encode_filename(filename))
             except BaseException:
@@ -575,12 +623,18 @@ class ID3File(File):
                     for key, frame in list(tags.items()):
                         if frame.FrameID == 'USLT' and frame.desc == desc:
                             del tags[key]
+                elif name == 'syncedlyrics' or name.startswith('syncedlyrics:'):
+                    (lang, desc) = parse_subtag(name)
+                    for key, frame in list(tags.items()):
+                        if frame.FrameID == 'SYLT' and frame.desc == desc and frame.lang == lang \
+                                and frame.type == 1:
+                            del tags[key]
                 elif name in self._rtipl_roles:
                     role = self._rtipl_roles[name]
                     _remove_people_with_role(tags, ['TIPL', 'IPLS'], role)
                 elif name == 'musicbrainz_recordingid':
                     for key, frame in list(tags.items()):
-                        if frame.FrameID == 'UFID' and frame.owner == 'http://musicbrainz.org':
+                        if frame.FrameID == 'UFID' and frame.owner == "http://musicbrainz.org":
                             del tags[key]
                 elif name == 'license':
                     tags.delall(real_name)
@@ -598,9 +652,9 @@ class ID3File(File):
                     tags.delall('TXXX:' + real_name)
                     if real_name in self.__rrename_freetext:
                         tags.delall('TXXX:' + self.__rrename_freetext[real_name])
-                elif not name.startswith("~id3:") and name not in self.__other_supported_tags:
+                elif not name.startswith('~id3:') and name not in self.__other_supported_tags:
                     tags.delall('TXXX:' + name)
-                elif name.startswith("~id3:"):
+                elif name.startswith('~id3:'):
                     frameid = name[5:]
                     tags.delall(frameid)
                 elif name in self.__other_supported_tags:
@@ -610,9 +664,9 @@ class ID3File(File):
 
     @classmethod
     def supports_tag(cls, name):
-        return ((name and not name.startswith("~") and name not in UNSUPPORTED_TAGS)
-                or name == "~rating"
-                or name.startswith("~id3"))
+        return ((name and not name.startswith('~') and name not in UNSUPPORTED_TAGS)
+                or name == '~rating'
+                or name.startswith('~id3'))
 
     def _get_tag_name(self, name):
         if name in self.__rtranslate:
@@ -658,26 +712,71 @@ class ID3File(File):
         if not settings:
             settings = get_config().setting
 
-        if not settings["write_id3v23"]:
+        if not settings['write_id3v23']:
             return super().format_specific_metadata(metadata, tag, settings)
 
         values = metadata.getall(tag)
         if not values:
             return values
 
-        if tag == "originaldate":
+        if tag == 'originaldate':
             values = [v[:4] for v in values]
-        elif tag == "date":
+        elif tag == 'date':
             values = [(v[:4] if len(v) < 10 else v) for v in values]
 
         # If this is a multi-valued field, then it needs to be flattened,
         # unless it's TIPL or TMCL which can still be multi-valued.
         if (len(values) > 1 and tag not in ID3File._rtipl_roles
-                and not tag.startswith("performer:")):
-            join_with = settings["id3v23_join_with"]
+                and not tag.startswith('performer:')):
+            join_with = settings['id3v23_join_with']
             values = [join_with.join(values)]
 
         return values
+
+    def _parse_sylt_text(self, text, length):
+
+        def milliseconds_to_timestamp(ms):
+            minutes = ms // (60 * 1000)
+            seconds = (ms % (60 * 1000)) // 1000
+            remaining_ms = ms % 1000
+            return f"{minutes:02d}:{seconds:02d}.{remaining_ms:03d}"
+
+        lyrics, milliseconds = zip(*text)
+        milliseconds = (*milliseconds, length * 1000)
+        first_timestamp = milliseconds_to_timestamp(milliseconds[0])
+        lrc_lyrics = [f"[{first_timestamp}]"]
+        for i, lyrics in enumerate(lyrics):
+            timestamp = milliseconds_to_timestamp(milliseconds[i])
+            if '\n' in lyrics:
+                split = lyrics.split('\n')
+                lrc_lyrics.append(f"<{timestamp}>{split[0]}")
+                distribution = (milliseconds[i + 1] - milliseconds[i]) / len(lyrics.replace('\n', ''))
+                estimation = milliseconds[i] + distribution * len(split[0])
+                for line in split[1:]:
+                    timestamp = milliseconds_to_timestamp(int(estimation))
+                    estimation += distribution * len(line)
+                    lrc_lyrics.append(f"\n[{timestamp}]{line}")
+            else:
+                lrc_lyrics.append(f"<{timestamp}>{lyrics}")
+        return "".join(lrc_lyrics)
+
+    def _parse_lrc_text(self, text):
+        sylt_lyrics = []
+        # Remove standard lrc timestamps if text is in a2 enhanced lrc
+        if self.__lrc_syllable_re_parse.search(text):
+            text = self.__lrc_line_re_parse.sub("", text)
+
+        timestamp_and_lyrics = batched(self.__lrc_both_re_parse.split(text)[1:], 2)
+        for timestamp, lyrics in timestamp_and_lyrics:
+            minutes, seconds = timestamp[1:-1].split(':')
+            milliseconds = int(minutes) * 60 * 1000 + int(float(seconds) * 1000)
+            sylt_lyrics.append((lyrics, milliseconds))
+
+        # Remove frames with no lyrics and a repeating timestamp
+        for i, frame in enumerate(sylt_lyrics[:-1]):
+            if not frame[0] and frame[1] == sylt_lyrics[i + 1][1]:
+                sylt_lyrics.pop(i)
+        return sylt_lyrics
 
 
 class MP3File(ID3File):

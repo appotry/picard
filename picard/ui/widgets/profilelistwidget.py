@@ -3,6 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2021 Bob Swift
+# Copyright (C) 2022-2023 Philipp Wolfer
+# Copyright (C) 2022-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -22,13 +24,17 @@
 from functools import partial
 import uuid
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
 
-from picard.const import DEFAULT_PROFILE_NAME
+from picard.const.defaults import DEFAULT_PROFILE_NAME
+from picard.i18n import (
+    gettext as _,
+    gettext_constants,
+)
 from picard.util import unique_numbered_title
 
 from picard.ui import HashableListWidgetItem
@@ -40,25 +46,25 @@ class ProfileListWidget(QtWidgets.QListWidget):
         item = self.itemAt(event.x(), event.y())
         if item:
             menu = QtWidgets.QMenu(self)
-            rename_action = QtWidgets.QAction(_("Rename profile"), self)
+            rename_action = QtGui.QAction(_("Rename profile"), self)
             rename_action.triggered.connect(partial(self.editItem, item))
             menu.addAction(rename_action)
-            remove_action = QtWidgets.QAction(_("Remove profile"), self)
+            remove_action = QtGui.QAction(_("Remove profile"), self)
             remove_action.triggered.connect(partial(self.remove_profile, item))
             menu.addAction(remove_action)
-            menu.exec_(event.globalPos())
+            menu.exec(event.globalPos())
 
     def keyPressEvent(self, event):
-        if event.matches(QtGui.QKeySequence.Delete):
+        if event.matches(QtGui.QKeySequence.StandardKey.Delete):
             self.remove_selected_profile()
-        elif event.key() == QtCore.Qt.Key_Insert:
+        elif event.key() == QtCore.Qt.Key.Key_Insert:
             self.add_profile()
         else:
             super().keyPressEvent(event)
 
     def unique_profile_name(self, base_name=None):
         if base_name is None:
-            base_name = _(DEFAULT_PROFILE_NAME)
+            base_name = gettext_constants(DEFAULT_PROFILE_NAME)
         existing_titles = [self.item(i).name for i in range(self.count())]
         return unique_numbered_title(base_name, existing_titles)
 
@@ -66,10 +72,10 @@ class ProfileListWidget(QtWidgets.QListWidget):
         if name is None:
             name = self.unique_profile_name()
         list_item = ProfileListWidgetItem(name=name, profile_id=profile_id)
-        list_item.setCheckState(QtCore.Qt.Checked)
+        list_item.setCheckState(QtCore.Qt.CheckState.Checked)
         self.insertItem(0, list_item)
-        self.setCurrentItem(list_item, QtCore.QItemSelectionModel.Clear
-            | QtCore.QItemSelectionModel.SelectCurrent)
+        self.setCurrentItem(list_item, QtCore.QItemSelectionModel.SelectionFlag.Clear
+            | QtCore.QItemSelectionModel.SelectionFlag.SelectCurrent)
 
     def remove_selected_profile(self):
         items = self.selectedItems()
@@ -80,8 +86,8 @@ class ProfileListWidget(QtWidgets.QListWidget):
         row = self.row(item)
         msg = _("Are you sure you want to remove this profile?")
         reply = QtWidgets.QMessageBox.question(self, _('Confirm Remove'), msg,
-            QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No)
-        if item and reply == QtWidgets.QMessageBox.Yes:
+            QtWidgets.QMessageBox.StandardButton.Yes, QtWidgets.QMessageBox.StandardButton.No)
+        if item and reply == QtWidgets.QMessageBox.StandardButton.Yes:
             item = self.takeItem(row)
             del item
 
@@ -91,11 +97,11 @@ class ProfileListWidgetItem(HashableListWidgetItem):
 
     def __init__(self, name=None, enabled=True, profile_id=""):
         super().__init__(name)
-        self.setFlags(self.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsEditable)
+        self.setFlags(self.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable | QtCore.Qt.ItemFlag.ItemIsEditable)
         if name is None:
-            name = _(DEFAULT_PROFILE_NAME)
+            name = gettext_constants(DEFAULT_PROFILE_NAME)
         self.setText(name)
-        self.setCheckState(QtCore.Qt.Checked if enabled else QtCore.Qt.Unchecked)
+        self.setCheckState(QtCore.Qt.CheckState.Checked if enabled else QtCore.Qt.CheckState.Unchecked)
         if not profile_id:
             profile_id = str(uuid.uuid4())
         self.profile_id = profile_id
@@ -110,7 +116,7 @@ class ProfileListWidgetItem(HashableListWidgetItem):
 
     @property
     def enabled(self):
-        return self.checkState() == QtCore.Qt.Checked
+        return self.checkState() == QtCore.Qt.CheckState.Checked
 
     def get_all(self):
         # tuples used to get pickle dump of settings to work

@@ -2,9 +2,10 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2014, 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2014, 2018, 2020-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2020-2021 Philipp Wolfer
+# Copyright (C) 2024 Giorgio Fontanive
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -21,10 +22,24 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
+from dataclasses import dataclass
 from io import BytesIO
 import struct
 
 from picard.util.bitreader import LSBBitReader
+
+
+@dataclass
+class ImageInfo:
+    width: int
+    height: int
+    mime: str
+    extension: str
+    datalen: int
+
+    @property
+    def format(self):
+        return self.extension[1:]
 
 
 class IdentificationError(Exception):
@@ -53,14 +68,20 @@ class IdentifyImageType:
         self.data = data
         self.datalen = len(self.data)
         if self.datalen < 16:
-            raise NotEnoughData('Not enough data')
+            raise NotEnoughData("Not enough data")
 
     def read(self):
         self._read()
         return self._result()
 
     def _result(self):
-        return (int(self.w), int(self.h), self.mime, self.extension, self.datalen)
+        return ImageInfo(
+            width=int(self.w),
+            height=int(self.h),
+            mime=self.mime,
+            extension=self.extension,
+            datalen=self.datalen,
+        )
 
     def match(self):
         raise NotImplementedError
@@ -176,7 +197,7 @@ class IdentifyWebP(IdentifyImageType):
             index = data.find(b'\x9d\x01\x2a')
             if index != -1:
                 if self.datalen < index + 7:
-                    raise NotEnoughData('Not enough data for WebP VP8')
+                    raise NotEnoughData("Not enough data for WebP VP8")
                 self.w, self.h = struct.unpack('<HH', data[index + 3:index + 7])
                 # Width and height are encoded as 14 bit integers, ignore the first 2 bits
                 self.w &= 0x3fff
@@ -186,14 +207,14 @@ class IdentifyWebP(IdentifyImageType):
         # Simple File Format (Lossless)
         elif format == b'VP8L':
             if self.datalen < 25:
-                raise NotEnoughData('Not enough data for WebP VP8L')
+                raise NotEnoughData("Not enough data for WebP VP8L")
             reader = LSBBitReader(BytesIO(data[21:25]))
             self.w = reader.bits(14) + 1
             self.h = reader.bits(14) + 1
         # Extended File Format
         elif format == b'VP8X':
             if self.datalen < 30:
-                raise NotEnoughData('Not enough data for WebP VP8X')
+                raise NotEnoughData("Not enough data for WebP VP8X")
             reader = LSBBitReader(BytesIO(data[24:30]))
             self.w = reader.bits(24) + 1
             self.h = reader.bits(24) + 1
@@ -230,7 +251,7 @@ class IdentifyTiff(IdentifyImageType):
         elif byte_order == TIFF_BYTE_ORDER_MSB:
             order = '>'
         else:
-            raise UnexpectedError('TIFF: unexpected byte order %r' % byte_order)
+            raise UnexpectedError("TIFF: unexpected byte order %r" % byte_order)
         try:
             offset, = struct.unpack(order + 'I', data[4:8])
             entry_count, = struct.unpack(order + 'H', data[offset:offset + 2])
@@ -259,7 +280,7 @@ class IdentifyTiff(IdentifyImageType):
             value = data[:2]
             struct_format = order + 'H'
         else:
-            raise UnexpectedError('TIFF: unexpected field type %s' % tiff_type)
+            raise UnexpectedError("TIFF: unexpected field type %s" % tiff_type)
         return struct.unpack(struct_format, value)[0]
 
 
@@ -292,7 +313,7 @@ def identify(data):
         if obj.match():
             return obj.read()
 
-    raise UnrecognizedFormat('Unrecognized image data')
+    raise UnrecognizedFormat("Unrecognized image data")
 
 
 def supports_mime_type(mime):

@@ -3,14 +3,19 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2007-2008, 2011 Lukáš Lalinský
-# Copyright (C) 2008-2009, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008-2009, 2018-2021, 2023 Philipp Wolfer
 # Copyright (C) 2011 Johannes Weißl
 # Copyright (C) 2011-2013 Michael Wiencek
 # Copyright (C) 2012 Chad Wilson
 # Copyright (C) 2013 Calvin Walton
-# Copyright (C) 2013-2014, 2019-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2019-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2013-2015, 2017 Sophist-UK
 # Copyright (C) 2019 Zenara Daley
+# Copyright (C) 2023 Bob Swift
+# Copyright (C) 2023 certuna
+# Copyright (C) 2024 Arnab Chakraborty
+# Copyright (C) 2024 Giorgio Fontanive
+# Copyright (C) 2024 Serial
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -28,6 +33,11 @@
 
 
 import re
+
+from picard.i18n import (
+    N_,
+    gettext as _,
+)
 
 
 TAG_NAMES = {
@@ -52,7 +62,7 @@ TAG_NAMES = {
     'conductor': N_('Conductor'),
     'copyright': N_('Copyright'),
     'date': N_('Date'),
-    'director': N_('Video Director'),
+    'director': N_('Director'),
     'discid': N_('Disc Id'),
     'discnumber': N_('Disc Number'),
     'discsubtitle': N_('Disc Subtitle'),
@@ -60,6 +70,7 @@ TAG_NAMES = {
     'encodedby': N_('Encoded By'),
     'encodersettings': N_('Encoder Settings'),
     'engineer': N_('Engineer'),
+    '~filepath': N_('File Path'),
     'gapless': N_('Gapless Playback'),
     'genre': N_('Genre'),
     'grouping': N_('Grouping'),
@@ -102,6 +113,7 @@ TAG_NAMES = {
     'r128_track_gain': N_('R128 Track Gain'),
     '~rating': N_('Rating'),
     'releasecountry': N_('Release Country'),
+    'releasedate': N_('Release Date'),
     'releasestatus': N_('Release Status'),
     'releasetype': N_('Release Type'),
     'remixer': N_('Remixer'),
@@ -117,6 +129,7 @@ TAG_NAMES = {
     'showsort': N_('Show Name Sort Order'),
     'showmovement': N_('Show Work & Movement'),
     'subtitle': N_('Subtitle'),
+    'syncedlyrics': N_('Synced Lyrics'),
     'title': N_('Title'),
     'titlesort': N_('Title Sort Order'),
     'totaldiscs': N_('Total Discs'),
@@ -134,10 +147,39 @@ PRESERVED_TAGS = (
     '~dirname',
     '~extension',
     '~filename',
+    '~file_created_timestamp',
+    '~file_modified_timestamp',
     '~format',
     '~sample_rate',
     '~video',
 )
+
+# Tags that got generated in some way from the audio content.
+# Those can be set by Picard but the new values usually should be kept
+# when moving the file between tags.
+CALCULATED_TAGS = {
+    'acoustid_fingerprint',
+    'acoustid_id',
+    'replaygain_album_gain',
+    'replaygain_album_peak',
+    'replaygain_album_range',
+    'replaygain_reference_loudness',
+    'replaygain_track_gain',
+    'replaygain_track_peak',
+    'replaygain_track_range',
+    'r128_album_gain',
+    'r128_track_gain',
+}
+
+# Tags that contains infos related to files
+FILE_INFO_TAGS = {
+    '~bitrate',
+    '~bits_per_sample',
+    '~channels',
+    '~filesize',
+    '~format',
+    '~sample_rate',
+}
 
 
 def display_tag_name(name):
@@ -155,13 +197,42 @@ def parse_comment_tag(name):  # noqa: E302
     If language is not set ("comment:desc") "eng" is assumed as default.
     Returns a (lang, desc) tuple.
     """
-    try:
-        desc = name.split(':', 1)[1]
-    except IndexError:
-        desc = ''
     lang = 'eng'
-    match = RE_COMMENT_LANG.match(desc)
-    if match:
-        lang = match.group(1)
+    desc = ''
+
+    split = name.split(':', 1)
+    if len(split) > 1:
+        desc = split[1]
+
+    match_ = RE_COMMENT_LANG.match(desc)
+    if match_:
+        lang = match_.group(1)
         desc = desc[4:]
-    return (lang, desc)
+        return lang, desc
+
+    # Special case for unspecified language + empty description
+    if desc == 'XXX':
+        lang = 'XXX'
+        desc = ''
+
+    return lang, desc
+
+
+def parse_subtag(name):
+    """
+    Parses a tag name like "lyrics:XXX:desc", where XXX is the language.
+    If language is not set, the colons are still mandatory, and "eng" is
+    assumed by default.
+    """
+    split = name.split(':')
+    if len(split) > 1 and split[1]:
+        lang = split[1]
+    else:
+        lang = 'eng'
+
+    if len(split) > 2:
+        desc = split[2]
+    else:
+        desc = ''
+
+    return lang, desc

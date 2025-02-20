@@ -3,8 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006 Lukáš Lalinský
-# Copyright (C) 2019-2020 Philipp Wolfer
-# Copyright (C) 2020-2021 Laurent Monin
+# Copyright (C) 2019-2020, 2022-2023 Philipp Wolfer
+# Copyright (C) 2020-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -21,7 +21,7 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
@@ -33,7 +33,7 @@ class ElidedLabel(QtWidgets.QLabel):
 
     def __init__(self, parent=None):
         self._full_label = ""
-        super().__init__(parent)
+        super().__init__(parent=parent)
 
     def setText(self, text):
         self._full_label = text
@@ -48,7 +48,7 @@ class ElidedLabel(QtWidgets.QLabel):
         # text does not properly fit into width(), as a workaround subtract
         # 2 pixels from the available width.
         elided_label = metrics.elidedText(self._full_label,
-                                          QtCore.Qt.ElideRight,
+                                          QtCore.Qt.TextElideMode.ElideRight,
                                           self.width() - 2)
         super().setText(elided_label)
         if self._full_label and elided_label != self._full_label:
@@ -62,19 +62,19 @@ class ActiveLabel(QtWidgets.QLabel):
 
     clicked = QtCore.pyqtSignal()
 
-    def __init__(self, active=True, drops=False, *args):
-        super().__init__(*args)
+    def __init__(self, active=True, parent=None):
+        super().__init__(parent=parent)
         self.setActive(active)
 
     def setActive(self, active):
         self.active = active
         if self.active:
-            self.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+            self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         else:
             self.setCursor(QtGui.QCursor())
 
     def mouseReleaseEvent(self, event):
-        if self.active and event.button() == QtCore.Qt.LeftButton:
+        if self.active and event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.clicked.emit()
 
 
@@ -89,7 +89,7 @@ class ClickableSlider(QtWidgets.QSlider):
 
     def _set_position_from_mouse_event(self, event):
         value = QtWidgets.QStyle.sliderValueFromPosition(
-            self.minimum(), self.maximum(), event.x(), self.width())
+            self.minimum(), self.maximum(), event.pos().x(), self.width())
         self.setValue(value)
 
 
@@ -100,14 +100,21 @@ class Popover(QtWidgets.QFrame):
     Subclass this widget and add child widgets for a custom popover.
     """
 
-    def __init__(self, parent, position='bottom'):
-        super().__init__(parent)
-        self.setWindowFlags(QtCore.Qt.Popup | QtCore.Qt.FramelessWindowHint)
+    def __init__(self, position='bottom', parent=None):
+        super().__init__(parent=parent)
+        self.setWindowFlags(QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint)
         self.position = position
+        app = QtCore.QCoreApplication.instance()
+        self._is_wayland = app.is_wayland
+        self._main_window = app.window
 
     def show(self):
-        super().show()
+        super().show()  # show so that the geometry gets known
         self.update_position()
+        # on Wayland position updates only work if widget gets shown
+        if self._is_wayland:
+            super().hide()
+            super().show()
 
     def update_position(self):
         parent = self.parent()
@@ -116,16 +123,28 @@ class Popover(QtWidgets.QFrame):
             y = -self.height()
         else:  # bottom
             y = parent.height()
-        pos = parent.mapToGlobal(QtCore.QPoint(x, y))
-        screen_number = QtWidgets.QApplication.desktop().screenNumber()
-        screen = QtGui.QGuiApplication.screens()[screen_number]
-        screen_size = screen.availableVirtualSize()
-        if pos.x() < 0:
-            pos.setX(0)
+        pos = QtCore.QPoint(int(x), int(y))
+        pos = parent.mapToGlobal(pos)
+        if not self._is_wayland:
+            # Attempt to keep the popover fully visible on screen.
+            min_pos = QtCore.QPoint(0, 0)
+            screen = self._main_window.screen()
+            screen_size = screen.size()
+        else:
+            # The full screen size is not known on Wayland, but we can ensure
+            # the popover stays inside the app window boundary.
+            min_pos = self._main_window.pos()
+            window_size = self._main_window.size()
+            screen_size = QtCore.QSize(
+                min_pos.x() + window_size.width(),
+                min_pos.y() + window_size.height(),
+            )
+        if pos.x() < min_pos.x():
+            pos.setX(min_pos.x())
         if pos.x() + self.width() > screen_size.width():
             pos.setX(screen_size.width() - self.width())
-        if pos.y() < 0:
-            pos.setY(0)
+        if pos.y() < min_pos.y():
+            pos.setY(min_pos.y())
         if pos.y() + self.height() > screen_size.height():
             pos.setY(screen_size.height() - self.height())
         self.move(pos)
@@ -137,14 +156,14 @@ class SliderPopover(Popover):
     value_changed = QtCore.pyqtSignal(int)
 
     def __init__(self, parent, position, label, value):
-        super().__init__(parent, position)
+        super().__init__(position=position, parent=parent)
         vbox = QtWidgets.QVBoxLayout(self)
         self.label = QtWidgets.QLabel(label, self)
-        self.label.setAlignment(QtCore.Qt.AlignCenter)
+        self.label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         vbox.addWidget(self.label)
 
-        self.slider = ClickableSlider(self)
-        self.slider.setOrientation(QtCore.Qt.Horizontal)
-        self.slider.setValue(value)
+        self.slider = ClickableSlider(parent=self)
+        self.slider.setOrientation(QtCore.Qt.Orientation.Horizontal)
+        self.slider.setValue(int(value))
         self.slider.valueChanged.connect(self.value_changed)
         vbox.addWidget(self.slider)

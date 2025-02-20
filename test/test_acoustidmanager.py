@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2020 Laurent Monin
-# Copyright (C) 2020 Philipp Wolfer
+# Copyright (C) 2020, 2022 Philipp Wolfer
+# Copyright (C) 2020, 2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,8 +27,15 @@ from unittest.mock import (
 
 from test.picardtestcase import PicardTestCase
 
-from picard.acoustid.manager import AcoustIDManager
+from picard.acoustid.manager import (
+    FINGERPRINT_MAX_ALLOWED_LENGTH_DIFF_MS,
+    AcoustIDManager,
+    Submission,
+)
 from picard.file import File
+from picard.metadata import Metadata
+
+from picard.ui.enums import MainAction
 
 
 def mock_succeed_submission(*args, **kwargs):
@@ -48,6 +55,7 @@ def dummy_file(i):
     file = File('foo%d.flac' % i)
     file.acoustid_fingerprint = 'Z' * FINGERPRINT_SIZE
     file.acoustid_length = 120
+    file.metadata = Metadata(length=file.acoustid_length * 1000)
     return file
 
 
@@ -62,7 +70,7 @@ class AcoustIDManagerTest(PicardTestCase):
         self.mock_api_helper.submit_acoustid_fingerprints = Mock(wraps=mock_succeed_submission)
         self.acoustidmanager = AcoustIDManager(self.mock_api_helper)
         self.tagger.window = MagicMock()
-        self.tagger.window.enable_submit = MagicMock()
+        self.tagger.window.enable_action = MagicMock()
         AcoustIDManager.MAX_PAYLOAD = FINGERPRINT_SIZE * 5
         AcoustIDManager.MAX_ATTEMPTS = 3
 
@@ -79,25 +87,25 @@ class AcoustIDManagerTest(PicardTestCase):
     def test_add_invalid(self):
         file = File('foo.flac')
         self.acoustidmanager.add(file, '00000000-0000-0000-0000-000000000001')
-        self.tagger.window.enable_submit.assert_not_called()
+        self.tagger.window.enable_action.assert_not_called()
 
     def test_add_and_update(self):
         file = dummy_file(0)
         self.acoustidmanager.add(file, '00000000-0000-0000-0000-000000000001')
-        self.tagger.window.enable_submit.assert_called_with(False)
+        self.tagger.window.enable_action.assert_called_with(MainAction.SUBMIT_ACOUSTID, False)
         self.acoustidmanager.update(file, '00000000-0000-0000-0000-000000000002')
-        self.tagger.window.enable_submit.assert_called_with(True)
+        self.tagger.window.enable_action.assert_called_with(MainAction.SUBMIT_ACOUSTID, True)
         self.acoustidmanager.update(file, '00000000-0000-0000-0000-000000000001')
-        self.tagger.window.enable_submit.assert_called_with(False)
+        self.tagger.window.enable_action.assert_called_with(MainAction.SUBMIT_ACOUSTID, False)
 
     def test_add_and_remove(self):
         file = dummy_file(0)
         self.acoustidmanager.add(file, '00000000-0000-0000-0000-000000000001')
-        self.tagger.window.enable_submit.assert_called_with(False)
+        self.tagger.window.enable_action.assert_called_with(MainAction.SUBMIT_ACOUSTID, False)
         self.acoustidmanager.update(file, '00000000-0000-0000-0000-000000000002')
-        self.tagger.window.enable_submit.assert_called_with(True)
+        self.tagger.window.enable_action.assert_called_with(MainAction.SUBMIT_ACOUSTID, True)
         self.acoustidmanager.remove(file)
-        self.tagger.window.enable_submit.assert_called_with(False)
+        self.tagger.window.enable_action.assert_called_with(MainAction.SUBMIT_ACOUSTID, False)
 
     def test_is_submitted(self):
         file = dummy_file(0)
@@ -132,3 +140,196 @@ class AcoustIDManagerTest(PicardTestCase):
         self.assertEqual(self.mock_api_helper.submit_acoustid_fingerprints.call_count, 8)
         for f in files:
             self.assertFalse(self.acoustidmanager.is_submitted(f))
+
+
+class SubmissionTest(PicardTestCase):
+
+    def test_init(self):
+        fingerprint = 'abc'
+        duration = 42
+        recordingid = 'rec1'
+        metadata = Metadata({
+            'musicip_puid': 'puid1'
+        })
+        submission = Submission(fingerprint, duration, recordingid, metadata)
+        self.assertEqual(fingerprint, submission.fingerprint)
+        self.assertEqual(duration, submission.duration)
+        self.assertEqual(recordingid, submission.recordingid)
+        self.assertEqual(recordingid, submission.orig_recordingid)
+        self.assertEqual(metadata, submission.metadata)
+        self.assertEqual(metadata['musicip_puid'], submission.puid)
+        self.assertEqual(0, submission.attempts)
+
+    def test_bool(self):
+        self.assertTrue(bool(Submission('foo', 1)))
+        self.assertTrue(bool(Submission('foo', 0)))
+        self.assertFalse(bool(Submission('foo', None)))
+        self.assertFalse(bool(Submission(None, 1)))
+        self.assertFalse(bool(Submission('', 1)))
+
+    def test_valid_duration(self):
+        duration_s = 342
+        duration_ms = duration_s * 1000
+        metadata = Metadata()
+        submission = Submission('abc', duration_s, metadata=metadata)
+        self.assertFalse(submission.valid_duration)
+        metadata.length = duration_ms
+        self.assertTrue(submission.valid_duration)
+        metadata.length = duration_ms + FINGERPRINT_MAX_ALLOWED_LENGTH_DIFF_MS
+        self.assertTrue(submission.valid_duration)
+        metadata.length = duration_ms - FINGERPRINT_MAX_ALLOWED_LENGTH_DIFF_MS
+        self.assertTrue(submission.valid_duration)
+        metadata.length = duration_ms + 1 + FINGERPRINT_MAX_ALLOWED_LENGTH_DIFF_MS
+        self.assertFalse(submission.valid_duration)
+        metadata.length = duration_ms - 1 - FINGERPRINT_MAX_ALLOWED_LENGTH_DIFF_MS
+        self.assertFalse(submission.valid_duration)
+
+    def test_valid_duration_no_metadata(self):
+        submission = Submission('abc', 342)
+        self.assertTrue(submission.valid_duration)
+
+    def test_init_no_metadata(self):
+        submission = Submission('abc', 42)
+        self.assertIsNone(submission.metadata)
+        self.assertEqual('', submission.puid)
+
+    def test_is_submitted_no_recording_id(self):
+        submission = Submission('abc', 42)
+        self.assertTrue(submission.is_submitted)
+        submission.recordingid = 'rec1'
+        self.assertFalse(submission.is_submitted)
+
+    def test_is_submitted_move_recording_id(self):
+        submission = Submission('abc', 42, recordingid='rec1')
+        self.assertTrue(submission.is_submitted)
+        submission.recordingid = 'rec2'
+        self.assertFalse(submission.is_submitted)
+
+    def test_args_with_mbid(self):
+        submission = Submission('abc', 42, recordingid='rec1')
+        expected = {
+            'fingerprint': 'abc',
+            'duration': '42',
+            'mbid': 'rec1',
+        }
+        self.assertEqual(expected, submission.args)
+
+    def test_args_with_mbid_with_puid(self):
+        metadata = Metadata(
+            musicip_puid='p1'
+        )
+        metadata.length = 42000
+        submission = Submission('abc', 42, recordingid='rec1', metadata=metadata)
+        expected = {
+            'fingerprint': 'abc',
+            'duration': '42',
+            'mbid': 'rec1',
+            'puid': 'p1'
+        }
+        self.assertEqual(expected, submission.args)
+
+    def test_args_with_invalid_duration(self):
+        metadata = Metadata({
+            'title': 'The Track',
+            'artist': 'The Artist',
+            'album': 'The Album',
+            'albumartist': 'The Album Artist',
+            'tracknumber': '4',
+            'discnumber': '2',
+            'date': '2022-01-22',
+        })
+        metadata.length = 500000
+        submission = Submission('abc', 42, recordingid='rec1', metadata=metadata)
+        expected = {
+            'fingerprint': 'abc',
+            'duration': '42',
+            'track': metadata['title'],
+            'artist': metadata['artist'],
+            'album': metadata['album'],
+            'albumartist': metadata['albumartist'],
+            'trackno': metadata['tracknumber'],
+            'discno': metadata['discnumber'],
+            'year': '2022',
+        }
+        self.assertEqual(expected, submission.args)
+
+    def test_args_without_mbid(self):
+        metadata = Metadata({
+            'title': 'The Track',
+            'artist': 'The Artist',
+            'album': 'The Album',
+            'albumartist': 'The Album Artist',
+            'tracknumber': '4',
+            'discnumber': '2',
+            'date': '2022-01-22',
+        })
+        metadata.length = 42000
+        submission = Submission('abc', 42, recordingid=None, metadata=metadata)
+        expected = {
+            'fingerprint': 'abc',
+            'duration': '42',
+            'track': metadata['title'],
+            'artist': metadata['artist'],
+            'album': metadata['album'],
+            'albumartist': metadata['albumartist'],
+            'trackno': metadata['tracknumber'],
+            'discno': metadata['discnumber'],
+            'year': '2022',
+        }
+        self.assertEqual(expected, submission.args)
+
+    def test_args_year(self):
+        metadata = Metadata({
+            'year': '2022',
+        })
+        metadata.length = 500000
+        submission = Submission('abc', 42, recordingid='rec1', metadata=metadata)
+        args = submission.args
+        self.assertEqual('2022', args['year'])
+
+    def test_args_invalid_year(self):
+        metadata = Metadata({
+            'year': 'NaN',
+        })
+        metadata.length = 500000
+        submission = Submission('abc', 42, recordingid='rec1', metadata=metadata)
+        self.assertNotIn('year', submission.args)
+
+    def test_len_mbid_puid(self):
+        fingerprint = 'abc' * 30
+        puid = 'p1'
+        recordingid = 'rec1'
+        duration = 42
+        metadata = Metadata(
+            musicip_puid=puid
+        )
+        metadata.length = 42000
+        submission = Submission(fingerprint, 42, recordingid=recordingid, metadata=metadata)
+        expected_min_length = len('&fingerprint=%s&duration=%s&mbid=%s&puid=%s' % (fingerprint, duration, recordingid, puid))
+        self.assertGreater(len(submission), expected_min_length)
+
+    def test_len_no_mbid(self):
+        metadata = Metadata({
+            'title': 'The Track',
+            'artist': 'The Artist',
+            'album': 'The Album',
+            'albumartist': 'The Album Artist',
+            'tracknumber': '4',
+            'discnumber': '2',
+            'date': '2022-01-22',
+        })
+        metadata.length = 500000
+        submission = Submission('abc', 42, recordingid='rec1', metadata=metadata)
+        expected_args = {
+            'fingerprint': 'abc',
+            'duration': '42',
+            'track': metadata['title'],
+            'artist': metadata['artist'],
+            'album': metadata['album'],
+            'albumartist': metadata['albumartist'],
+            'trackno': metadata['tracknumber'],
+            'discno': metadata['discnumber'],
+            'year': '2022',
+        }
+        expected_min_length = len('&'.join(('='.join([k, v]) for k, v in expected_args.items())))
+        self.assertGreater(len(submission), expected_min_length)

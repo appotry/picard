@@ -201,7 +201,7 @@
       <enum>Qt::Horizontal</enum>
      </property>
      <property name="standardButtons">
-      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Save</set>
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
      </property>
     </widget>
    </item>
@@ -379,7 +379,7 @@
   </connection>
   <connection>
    <sender>tag_names</sender>
-   <signal>activated(QString)</signal>
+   <signal>activated(int)</signal>
    <receiver>EditTagDialog</receiver>
    <slot>tag_selected()</slot>
    <hints>

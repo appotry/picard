@@ -6,9 +6,10 @@
 # Copyright (C) 2014 Sophist-UK
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2017 Wieland Hoffmann
-# Copyright (C) 2017-2018, 2020-2021 Laurent Monin
+# Copyright (C) 2017-2018, 2020-2024 Laurent Monin
 # Copyright (C) 2018 Vishal Choudhary
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2022, 2024 Philipp Wolfer
+# Copyright (C) 2023 certuna
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -25,23 +26,24 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
 
 from picard.const import (
-    RELEASE_COUNTRIES,
     RELEASE_FORMATS,
     RELEASE_PRIMARY_GROUPS,
     RELEASE_SECONDARY_GROUPS,
     RELEASE_STATUS,
 )
+from picard.const.countries import RELEASE_COUNTRIES
+from picard.i18n import gettext as _
 from picard.util.tags import TAG_NAMES
 
 from picard.ui import PicardDialog
-from picard.ui.ui_edittagdialog import Ui_EditTagDialog
+from picard.ui.forms.ui_edittagdialog import Ui_EditTagDialog
 
 
 AUTOCOMPLETE_RELEASE_TYPES = [s.lower() for s
@@ -50,6 +52,8 @@ AUTOCOMPLETE_RELEASE_STATUS = sorted(s.lower() for s in RELEASE_STATUS)
 AUTOCOMPLETE_RELEASE_COUNTRIES = sorted(RELEASE_COUNTRIES, key=str.casefold)
 AUTOCOMPLETE_RELEASE_FORMATS = sorted(RELEASE_FORMATS, key=str.casefold)
 
+MULTILINE_TAGS = {'comment', 'lyrics', 'syncedlyrics'}
+
 
 class TagEditorDelegate(QtWidgets.QItemDelegate):
 
@@ -57,31 +61,31 @@ class TagEditorDelegate(QtWidgets.QItemDelegate):
         if not index.isValid():
             return None
         tag = self.get_tag_name(index)
-        if tag.partition(':')[0] in {'comment', 'lyrics'}:
+        if tag.partition(':')[0] in MULTILINE_TAGS:
             editor = QtWidgets.QPlainTextEdit(parent)
-            editor.setFrameStyle(editor.style().styleHint(QtWidgets.QStyle.SH_ItemView_DrawDelegateFrame, None, editor))
+            editor.setFrameStyle(editor.style().styleHint(QtWidgets.QStyle.StyleHint.SH_ItemView_DrawDelegateFrame, None, editor))
             editor.setMinimumSize(QtCore.QSize(0, 80))
         else:
             editor = super().createEditor(parent, option, index)
         completer = None
-        if tag in {'date', 'originaldate'}:
-            editor.setPlaceholderText(_('YYYY-MM-DD'))
+        if tag in {'date', 'originaldate', 'releasedate'}:
+            editor.setPlaceholderText(_("YYYY-MM-DD"))
         elif tag == 'originalyear':
-            editor.setPlaceholderText(_('YYYY'))
+            editor.setPlaceholderText(_("YYYY"))
         elif tag == 'releasetype':
             completer = QtWidgets.QCompleter(AUTOCOMPLETE_RELEASE_TYPES, editor)
         elif tag == 'releasestatus':
             completer = QtWidgets.QCompleter(AUTOCOMPLETE_RELEASE_STATUS, editor)
-            completer.setModelSorting(QtWidgets.QCompleter.CaseInsensitivelySortedModel)
+            completer.setModelSorting(QtWidgets.QCompleter.ModelSorting.CaseInsensitivelySortedModel)
         elif tag == 'releasecountry':
             completer = QtWidgets.QCompleter(AUTOCOMPLETE_RELEASE_COUNTRIES, editor)
-            completer.setModelSorting(QtWidgets.QCompleter.CaseInsensitivelySortedModel)
+            completer.setModelSorting(QtWidgets.QCompleter.ModelSorting.CaseInsensitivelySortedModel)
         elif tag == 'media':
             completer = QtWidgets.QCompleter(AUTOCOMPLETE_RELEASE_FORMATS, editor)
-            completer.setModelSorting(QtWidgets.QCompleter.CaseInsensitivelySortedModel)
+            completer.setModelSorting(QtWidgets.QCompleter.ModelSorting.CaseInsensitivelySortedModel)
         if editor and completer:
-            completer.setCompletionMode(QtWidgets.QCompleter.UnfilteredPopupCompletion)
-            completer.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
+            completer.setCompletionMode(QtWidgets.QCompleter.CompletionMode.UnfilteredPopupCompletion)
+            completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
             editor.setCompleter(completer)
         return editor
 
@@ -91,16 +95,16 @@ class TagEditorDelegate(QtWidgets.QItemDelegate):
 
 class EditTagDialog(PicardDialog):
 
-    def __init__(self, window, tag):
-        super().__init__(window)
+    def __init__(self, metadata_box, tag):
+        super().__init__(parent=metadata_box)
         self.ui = Ui_EditTagDialog()
         self.ui.setupUi(self)
-        self.window = window
         self.value_list = self.ui.value_list
-        self.metadata_box = window.metadata_box
+        self.tagger = QtCore.QCoreApplication.instance()
+        self.metadata_box = metadata_box
         self.tag = tag
         self.modified_tags = {}
-        self.different = False
+        self.is_grouped = False
         self.default_tags = sorted(
             set(list(TAG_NAMES.keys()) + self.metadata_box.tag_diff.tag_names))
         if len(self.metadata_box.files) == 1:
@@ -111,7 +115,7 @@ class EditTagDialog(PicardDialog):
         visible_tags = [tn for tn in self.default_tags if not tn.startswith("~")]
         tag_names.addItems(visible_tags)
         self.completer = QtWidgets.QCompleter(visible_tags, tag_names)
-        self.completer.setCompletionMode(QtWidgets.QCompleter.PopupCompletion)
+        self.completer.setCompletionMode(QtWidgets.QCompleter.CompletionMode.PopupCompletion)
         tag_names.setCompleter(self.completer)
         self.value_list.model().rowsInserted.connect(self.on_rows_inserted)
         self.value_list.model().rowsRemoved.connect(self.on_rows_removed)
@@ -120,12 +124,12 @@ class EditTagDialog(PicardDialog):
         self.value_selection_changed()
 
     def keyPressEvent(self, event):
-        if event.modifiers() == QtCore.Qt.NoModifier and event.key() in {QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return}:
+        if event.modifiers() == QtCore.Qt.KeyboardModifier.NoModifier and event.key() in {QtCore.Qt.Key.Key_Enter, QtCore.Qt.Key.Key_Return}:
             self.add_or_edit_value()
             event.accept()
-        elif event.matches(QtGui.QKeySequence.Delete):
+        elif event.matches(QtGui.QKeySequence.StandardKey.Delete):
             self.remove_value()
-        elif event.key() == QtCore.Qt.Key_Insert:
+        elif event.key() == QtCore.Qt.Key.Key_Insert:
             self.add_value()
         else:
             super().keyPressEvent(event)
@@ -144,7 +148,7 @@ class EditTagDialog(PicardDialog):
 
     def add_value(self):
         item = QtWidgets.QListWidgetItem()
-        item.setFlags(QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsEditable)
+        item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsEditable)
         self.value_list.addItem(item)
         self.value_list.setCurrentItem(item)
         self.value_list.editItem(item)
@@ -158,12 +162,15 @@ class EditTagDialog(PicardDialog):
         else:
             self.add_value()
 
+    def _group(self, is_grouped):
+        self.is_grouped = is_grouped
+        self.ui.add_value.setEnabled(not is_grouped)
+
     def remove_value(self):
         value_list = self.value_list
         row = value_list.currentRow()
-        if row == 0 and self.different:
-            self.different = False
-            self.ui.add_value.setEnabled(True)
+        if row == 0 and self.is_grouped:
+            self._group(False)
         value_list.takeItem(row)
 
     def on_rows_inserted(self, parent, first, last):
@@ -206,7 +213,7 @@ class EditTagDialog(PicardDialog):
         tag_names.editTextChanged.disconnect(self.tag_changed)
         line_edit = tag_names.lineEdit()
         cursor_pos = line_edit.cursorPosition()
-        flags = QtCore.Qt.MatchFixedString | QtCore.Qt.MatchCaseSensitive
+        flags = QtCore.Qt.MatchFlag.MatchFixedString | QtCore.Qt.MatchFlag.MatchCaseSensitive
 
         # if the previous tag was new and has no value, remove it from the QComboBox.
         # e.g. typing "XYZ" should not leave "X" or "XY" in the QComboBox.
@@ -236,36 +243,42 @@ class EditTagDialog(PicardDialog):
         values = self.modified_tags.get(self.tag, None)
         if values is None:
             new_tags = self.metadata_box.tag_diff.new
-            display_value, self.different = new_tags.display_value(self.tag)
-            values = [display_value] if self.different else new_tags[self.tag]
-            self.ui.add_value.setEnabled(not self.different)
+            display_value = new_tags.display_value(self.tag)
+            if display_value.is_grouped:
+                # grouped values have a special text, which isn't a valid tag value
+                values = [display_value.text]
+                self._group(True)
+            else:
+                # normal tag values
+                values = new_tags[self.tag]
+                self._group(False)
 
         self.value_list.model().rowsInserted.disconnect(self.on_rows_inserted)
         self._add_value_items(values)
         self.value_list.model().rowsInserted.connect(self.on_rows_inserted)
-        self.value_list.setCurrentItem(self.value_list.item(0), QtCore.QItemSelectionModel.SelectCurrent)
+        self.value_list.setCurrentItem(self.value_list.item(0), QtCore.QItemSelectionModel.SelectionFlag.SelectCurrent)
         tag_names.editTextChanged.connect(self.tag_changed)
+
+    def _set_item_style(self, item):
+        font = item.font()
+        font.setItalic(self.is_grouped)
+        item.setFont(font)
 
     def _add_value_items(self, values):
         values = [v for v in values if v] or [""]
         for value in values:
             item = QtWidgets.QListWidgetItem(value)
-            item.setFlags(QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsEditable | QtCore.Qt.ItemIsDragEnabled)
-            font = item.font()
-            font.setItalic(self.different)
-            item.setFont(font)
+            item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsEditable | QtCore.Qt.ItemFlag.ItemIsDragEnabled)
+            self._set_item_style(item)
             self.value_list.addItem(item)
 
     def value_edited(self, item):
         row = self.value_list.row(item)
         value = item.text()
-        if row == 0 and self.different:
+        if row == 0 and self.is_grouped:
             self.modified_tags[self.tag] = [value]
-            self.different = False
-            font = item.font()
-            font.setItalic(False)
-            item.setFont(font)
-            self.ui.add_value.setEnabled(True)
+            self._group(False)
+            self._set_item_style(item)
         else:
             self._modified_tag()[row] = value
             # add tags to the completer model once they get values
@@ -287,7 +300,7 @@ class EditTagDialog(PicardDialog):
                                              list(self.metadata_box.tag_diff.new[self.tag]) or [""])
 
     def accept(self):
-        with self.window.ignore_selection_changes:
+        with self.tagger.window.ignore_selection_changes:
             for tag, values in self.modified_tags.items():
                 self.modified_tags[tag] = [v for v in values if v]
             modified_tags = self.modified_tags.items()

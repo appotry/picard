@@ -2,7 +2,7 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2015, 2018-2021 Laurent Monin
+# Copyright (C) 2015, 2018-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2017 Ville Skyttä
 # Copyright (C) 2019-2021 Philipp Wolfer
@@ -25,18 +25,17 @@
 import os
 import re
 
-from picard.config import (
-    TextOption,
-    get_config,
-)
+from picard.config import get_config
+from picard.const.defaults import DEFAULT_LOCAL_COVER_ART_REGEX
 from picard.coverart.image import LocalFileCoverArtImage
 from picard.coverart.providers.provider import (
     CoverArtProvider,
     ProviderOptions,
 )
 from picard.coverart.utils import CAA_TYPES
+from picard.i18n import N_
 
-from picard.ui.ui_provider_options_local import Ui_LocalOptions
+from picard.ui.forms.ui_provider_options_local import Ui_LocalOptions
 
 
 class ProviderOptionsLocal(ProviderOptions):
@@ -45,11 +44,6 @@ class ProviderOptionsLocal(ProviderOptions):
     """
 
     HELP_URL = '/config/options_local_files.html'
-    _DEFAULT_LOCAL_COVER_ART_REGEX = r'^(?:cover|folder|albumart)(.*)\.(?:jpe?g|png|gif|tiff?|webp)$'
-
-    options = [
-        TextOption("setting", "local_cover_regex", _DEFAULT_LOCAL_COVER_ART_REGEX),
-    ]
 
     _options_ui = Ui_LocalOptions
 
@@ -59,15 +53,15 @@ class ProviderOptionsLocal(ProviderOptions):
         self.ui.local_cover_regex_default.clicked.connect(self.set_local_cover_regex_default)
 
     def set_local_cover_regex_default(self):
-        self.ui.local_cover_regex_edit.setText(self._DEFAULT_LOCAL_COVER_ART_REGEX)
+        self.ui.local_cover_regex_edit.setText(DEFAULT_LOCAL_COVER_ART_REGEX)
 
     def load(self):
         config = get_config()
-        self.ui.local_cover_regex_edit.setText(config.setting["local_cover_regex"])
+        self.ui.local_cover_regex_edit.setText(config.setting['local_cover_regex'])
 
     def save(self):
         config = get_config()
-        config.setting["local_cover_regex"] = self.ui.local_cover_regex_edit.text()
+        config.setting['local_cover_regex'] = self.ui.local_cover_regex_edit.text()
 
 
 class CoverArtProviderLocal(CoverArtProvider):

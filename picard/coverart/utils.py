@@ -2,7 +2,7 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2013-2015, 2020-2021 Laurent Monin
+# Copyright (C) 2013-2015, 2020-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2018 Wieland Hoffmann
 # Copyright (C) 2019-2021 Philipp Wolfer
@@ -25,6 +25,11 @@
 from enum import IntEnum
 
 from picard.const import MB_ATTRIBUTES
+from picard.i18n import (
+    N_,
+    gettext as _,
+    pgettext_attributes,
+)
 
 
 # list of types from http://musicbrainz.org/doc/Cover_Art/Types
@@ -35,7 +40,7 @@ for k, v in sorted(MB_ATTRIBUTES.items(), key=lambda k_v: k_v[0]):
         CAA_TYPES.append({'name': v.lower(), 'title': v})
 
 # pseudo type, used for the no type case
-CAA_TYPES.append({'name': "unknown", 'title': N_("Unknown")})
+CAA_TYPES.append({'name': 'unknown', 'title': N_("Unknown")})
 
 CAA_TYPES_TR = {}
 for t in CAA_TYPES:
@@ -76,23 +81,23 @@ class Id3ImageType(IntEnum):
 
 
 __ID3_IMAGE_TYPE_MAP = {
-    "obi": Id3ImageType.OTHER,
-    "tray": Id3ImageType.OTHER,
-    "spine": Id3ImageType.OTHER,
-    "sticker": Id3ImageType.OTHER,
-    "other": Id3ImageType.OTHER,
-    "front": Id3ImageType.COVER_FRONT,
-    "back": Id3ImageType.COVER_BACK,
-    "booklet": Id3ImageType.LEAFLET_PAGE,
-    "track": Id3ImageType.MEDIA,
-    "medium": Id3ImageType.MEDIA,
+    'obi': Id3ImageType.OTHER,
+    'tray': Id3ImageType.OTHER,
+    'spine': Id3ImageType.OTHER,
+    'sticker': Id3ImageType.OTHER,
+    'other': Id3ImageType.OTHER,
+    'front': Id3ImageType.COVER_FRONT,
+    'back': Id3ImageType.COVER_BACK,
+    'booklet': Id3ImageType.LEAFLET_PAGE,
+    'track': Id3ImageType.MEDIA,
+    'medium': Id3ImageType.MEDIA,
 }
 
 __ID3_REVERSE_IMAGE_TYPE_MAP = {v: k for k, v in __ID3_IMAGE_TYPE_MAP.items()}
 
 
 def image_type_from_id3_num(id3type):
-    return __ID3_REVERSE_IMAGE_TYPE_MAP.get(id3type, "other")
+    return __ID3_REVERSE_IMAGE_TYPE_MAP.get(id3type, 'other')
 
 
 def image_type_as_id3_num(texttype):
@@ -101,3 +106,10 @@ def image_type_as_id3_num(texttype):
 
 def types_from_id3(id3type):
     return [image_type_from_id3_num(id3type)]
+
+
+TYPES_SEPARATOR = ", "
+
+
+def translated_types_as_string(types, separator=TYPES_SEPARATOR):
+    return separator.join(translate_caa_type(t) for t in types)

@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>570</width>
-    <height>435</height>
+    <height>455</height>
    </rect>
   </property>
   <layout class="QVBoxLayout">
@@ -20,12 +20,78 @@
       <property name="spacing">
        <number>2</number>
       </property>
-      <item row="5" column="0">
-       <widget class="QCheckBox" name="recursively_add_files">
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_ignore_regex">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
         <property name="text">
-         <string>Include sub-folders when adding files from folder</string>
+         <string>Ignore file paths matching the following regular expression:</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
         </property>
        </widget>
+      </item>
+      <item row="8" column="0">
+       <layout class="QHBoxLayout" name="horizontalLayout_2">
+        <item>
+         <widget class="QLabel" name="label_query_limit">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="text">
+           <string>Maximum number of entities to return per MusicBrainz query</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="query_limit">
+          <property name="currentText">
+           <string notr="true">50</string>
+          </property>
+          <property name="currentIndex">
+           <number>1</number>
+          </property>
+          <item>
+           <property name="text">
+            <string notr="true">25</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string notr="true">50</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string notr="true">75</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string notr="true">100</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="regex_error">
+        <property name="text">
+         <string/>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLineEdit" name="ignore_regex"/>
       </item>
       <item row="6" column="0" rowspan="2">
        <layout class="QHBoxLayout" name="horizontalLayout">
@@ -78,26 +144,10 @@
         </item>
        </layout>
       </item>
-      <item row="1" column="0">
-       <widget class="QLabel" name="label_ignore_regex">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-          <horstretch>0</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
+      <item row="5" column="0">
+       <widget class="QCheckBox" name="recursively_add_files">
         <property name="text">
-         <string>Ignore file paths matching the following regular expression:</string>
-        </property>
-        <property name="wordWrap">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item row="3" column="0">
-       <widget class="QLabel" name="regex_error">
-        <property name="text">
-         <string/>
+         <string>Include sub-folders when adding files from folder</string>
         </property>
        </widget>
       </item>
@@ -108,9 +158,6 @@
         </property>
        </widget>
       </item>
-      <item row="2" column="0">
-       <widget class="QLineEdit" name="ignore_regex"/>
-      </item>
      </layout>
     </widget>
    </item>
@@ -119,22 +166,15 @@
      <property name="title">
       <string>Ignore the following tracks when determining whether a release is complete</string>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout_2">
-      <item>
+     <layout class="QGridLayout" name="gridLayout">
+      <item row="0" column="0">
        <widget class="QCheckBox" name="completeness_ignore_videos">
         <property name="text">
          <string>Video tracks</string>
         </property>
        </widget>
       </item>
-      <item>
-       <widget class="QCheckBox" name="completeness_ignore_pregap">
-        <property name="text">
-         <string>Pregap tracks</string>
-        </property>
-       </widget>
-      </item>
-      <item>
+      <item row="3" column="0">
        <widget class="QCheckBox" name="completeness_ignore_data">
         <property name="text">
          <string>Data tracks</string>
@@ -144,7 +184,14 @@
         </property>
        </widget>
       </item>
-      <item>
+      <item row="0" column="1">
+       <widget class="QCheckBox" name="completeness_ignore_pregap">
+        <property name="text">
+         <string>Pregap tracks</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
        <widget class="QCheckBox" name="completeness_ignore_silence">
         <property name="text">
          <string>Silent tracks</string>
@@ -155,7 +202,7 @@
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="groupBox_2">
+    <widget class="QGroupBox" name="groupBox_ignore_tags">
      <property name="title">
       <string>Tags to ignore for comparison:</string>
      </property>
@@ -188,10 +235,9 @@
   <tabstop>ignore_hidden_files</tabstop>
   <tabstop>recursively_add_files</tabstop>
   <tabstop>ignore_track_duration_difference_under</tabstop>
+  <tabstop>query_limit</tabstop>
   <tabstop>completeness_ignore_videos</tabstop>
-  <tabstop>completeness_ignore_pregap</tabstop>
   <tabstop>completeness_ignore_data</tabstop>
-  <tabstop>completeness_ignore_silence</tabstop>
  </tabstops>
  <resources/>
  <connections/>

@@ -3,8 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2021 Bob Swift
-# Copyright (C) 2021 Laurent Monin
-# Copyright (C) 2021 Philipp Wolfer
+# Copyright (C) 2021-2022 Philipp Wolfer
+# Copyright (C) 2021-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -21,16 +21,17 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtWidgets,
 )
 
 from picard.const import PICARD_URLS
+from picard.i18n import gettext as _
 from picard.script import script_function_documentation_all
 
 from picard.ui import FONT_FAMILY_MONOSPACE
-from picard.ui.theme import theme
+from picard.ui.colors import interface_colors
 
 
 DOCUMENTATION_HTML_TEMPLATE = '''
@@ -61,14 +62,19 @@ code {
 class ScriptingDocumentationWidget(QtWidgets.QWidget):
     """Custom widget to display the scripting documentation.
     """
-    def __init__(self, parent, include_link=True, *args, **kwargs):
+    def __init__(self, include_link=True, parent=None):
         """Custom widget to display the scripting documentation.
 
         Args:
-            parent (QWidget): Parent screen to check layoutDirection()
             include_link (bool): Indicates whether the web link should be included
+            parent (QWidget): Parent screen to check layoutDirection()
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(parent=parent)
+
+        if self.layoutDirection() == QtCore.Qt.LayoutDirection.RightToLeft:
+            text_direction = 'rtl'
+        else:
+            text_direction = 'ltr'
 
         def process_html(html, function):
             if not html:
@@ -89,14 +95,9 @@ class ScriptingDocumentationWidget(QtWidgets.QWidget):
             postprocessor=process_html,
         )
 
-        if parent.layoutDirection() == QtCore.Qt.RightToLeft:
-            text_direction = 'rtl'
-        else:
-            text_direction = 'ltr'
-
         html = DOCUMENTATION_HTML_TEMPLATE % {
             'html': "<dl>%s</dl>" % funcdoc,
-            'script_function_fg': theme.syntax_theme.func.name(),
+            'script_function_fg': interface_colors.get_qcolor('syntax_hl_func').name(),
             'monospace_font': FONT_FAMILY_MONOSPACE,
             'dir': text_direction,
             'inline_start': 'right' if text_direction == 'rtl' else 'left'
@@ -110,29 +111,29 @@ class ScriptingDocumentationWidget(QtWidgets.QWidget):
 
         self.verticalLayout = QtWidgets.QVBoxLayout(self)
         self.verticalLayout.setContentsMargins(0, 0, 0, 0)
-        self.verticalLayout.setObjectName("docs_verticalLayout")
+        self.verticalLayout.setObjectName('docs_verticalLayout')
         self.textBrowser = QtWidgets.QTextBrowser(self)
         self.textBrowser.setEnabled(True)
         self.textBrowser.setMinimumSize(QtCore.QSize(0, 0))
-        self.textBrowser.setObjectName("docs_textBrowser")
+        self.textBrowser.setObjectName('docs_textBrowser')
         self.textBrowser.setHtml(html)
         self.textBrowser.show()
         self.verticalLayout.addWidget(self.textBrowser)
         self.horizontalLayout = QtWidgets.QHBoxLayout()
         self.horizontalLayout.setContentsMargins(-1, 0, -1, -1)
-        self.horizontalLayout.setObjectName("docs_horizontalLayout")
+        self.horizontalLayout.setObjectName('docs_horizontalLayout')
         self.scripting_doc_link = QtWidgets.QLabel(self)
-        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.scripting_doc_link.sizePolicy().hasHeightForWidth())
         if include_link:
             self.scripting_doc_link.setSizePolicy(sizePolicy)
             self.scripting_doc_link.setMinimumSize(QtCore.QSize(0, 20))
-            self.scripting_doc_link.setAlignment(QtCore.Qt.AlignCenter)
+            self.scripting_doc_link.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.scripting_doc_link.setWordWrap(True)
             self.scripting_doc_link.setOpenExternalLinks(True)
-            self.scripting_doc_link.setObjectName("docs_scripting_doc_link")
+            self.scripting_doc_link.setObjectName('docs_scripting_doc_link')
             self.scripting_doc_link.setText(link)
             self.scripting_doc_link.show()
             self.horizontalLayout.addWidget(self.scripting_doc_link)

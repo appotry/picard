@@ -4,7 +4,7 @@
 #
 # Copyright (C) 2007-2008 Lukáš Lalinský
 # Copyright (C) 2009 Carlin Mangar
-# Copyright (C) 2009, 2014, 2017-2021 Philipp Wolfer
+# Copyright (C) 2009, 2014, 2017-2021, 2023 Philipp Wolfer
 # Copyright (C) 2011 johnny64
 # Copyright (C) 2011-2013 Michael Wiencek
 # Copyright (C) 2013 Sebastian Ramacher
@@ -13,10 +13,11 @@
 # Copyright (C) 2013-2014 Sophist-UK
 # Copyright (C) 2014 Johannes Dewender
 # Copyright (C) 2014 Shadab Zafar
-# Copyright (C) 2014-2015, 2018-2021 Laurent Monin
+# Copyright (C) 2014-2015, 2018-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2017 Frederik “Freso” S. Olesen
 # Copyright (C) 2018 Vishal Choudhary
+# Copyright (C) 2023 tuspar
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -65,20 +66,21 @@ def _unregister_module_extensions(module):
         ep.unregister_module(module)
 
 
-class ExtensionPoint(object):
+class ExtensionPoint:
 
     def __init__(self, label=None):
         if label is None:
             import uuid
-            label = uuid.uuid4()
-        self.label = label
+            self.label = uuid.uuid4()
+        else:
+            self.label = label
         self.__dict = defaultdict(list)
         _extension_points.append(self)
 
     def register(self, module, item):
         if module.startswith(_PLUGIN_MODULE_PREFIX):
             name = module[_PLUGIN_MODULE_PREFIX_LEN:]
-            log.debug("ExtensionPoint: %s register <- plugin=%r item=%r" % (self.label, name, item))
+            log.debug("ExtensionPoint: %s register <- plugin=%r item=%r", self.label, name, item)
         else:
             name = None
             # uncomment to debug internal extensions loaded at startup
@@ -101,13 +103,16 @@ class ExtensionPoint(object):
 
     def __iter__(self):
         config = get_config()
-        enabled_plugins = config.setting["enabled_plugins"] if config else []
+        enabled_plugins = config.setting['enabled_plugins'] if config else []
         for name in self.__dict:
             if name is None or name in enabled_plugins:
                 yield from self.__dict[name]
 
+    def __repr__(self):
+        return f"ExtensionPoint(label='{self.label}')"
 
-class PluginShared(object):
+
+class PluginShared:
 
     def __init__(self):
         super().__init__()
@@ -187,6 +192,13 @@ class PluginWrapper(PluginShared):
             return ""
 
     @property
+    def user_guide_url(self):
+        try:
+            return self.data['PLUGIN_USER_GUIDE_URL']
+        except KeyError:
+            return ""
+
+    @property
     def files_list(self):
         return self.file[len(self.dir)+1:]
 
@@ -208,7 +220,7 @@ class PluginData(PluginShared):
         try:
             return super().__getattribute__(name)
         except AttributeError:
-            log.debug('Attribute %r not found for plugin %r', name, self.module_name)
+            log.debug("Attribute %r not found for plugin %r", name, self.module_name)
             return None
 
     @property
@@ -223,18 +235,6 @@ class PluginData(PluginShared):
         return ", ".join(self.files.keys())
 
 
-class PluginPriority:
-
-    """
-    Define few priority values for plugin functions execution order
-    Those with higher values are executed first
-    Default priority is PluginPriority.NORMAL
-    """
-    HIGH = 100
-    NORMAL = 0
-    LOW = -100
-
-
 class PluginFunctions:
 
     """
@@ -245,13 +245,17 @@ class PluginFunctions:
     def __init__(self, label=None):
         self.functions = defaultdict(lambda: ExtensionPoint(label=label))
 
-    def register(self, module, item, priority=PluginPriority.NORMAL):
+    def register(self, module, item, priority=0):
         self.functions[priority].register(module, item)
 
-    def run(self, *args, **kwargs):
-        """Execute registered functions with passed parameters honouring priority"""
+    def _get_functions(self):
+        """Returns registered functions by order of priority (highest first) and registration"""
         for priority, functions in sorted(self.functions.items(),
                                           key=lambda i: i[0],
                                           reverse=True):
-            for function in functions:
-                function(*args, **kwargs)
+            yield from functions
+
+    def run(self, *args, **kwargs):
+        """Execute registered functions with passed parameters honouring priority"""
+        for function in self._get_functions():
+            function(*args, **kwargs)

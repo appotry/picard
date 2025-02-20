@@ -3,12 +3,13 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2013-2014 Ionuț Ciocîrlan
-# Copyright (C) 2013-2014, 2018-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2018-2024 Laurent Monin
 # Copyright (C) 2014 Michael Wiencek
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2017 Ville Skyttä
 # Copyright (C) 2018 Antonio Larrosa
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2022, 2024 Philipp Wolfer
+# Copyright (C) 2022 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -25,15 +26,17 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
+from enum import IntEnum
 import math
 import os
+from pathlib import Path
 import re
 import shutil
 import struct
 import sys
 import unicodedata
 
-from PyQt5.QtCore import QStandardPaths
+from PyQt6.QtCore import QStandardPaths
 
 from picard import log
 from picard.const.sys import (
@@ -42,6 +45,9 @@ from picard.const.sys import (
     IS_WIN,
 )
 from picard.util import (
+    WIN_MAX_DIRPATH_LEN,
+    WIN_MAX_FILEPATH_LEN,
+    WIN_MAX_NODE_LEN,
     _io_encoding,
     decode_filename,
     encode_filename,
@@ -52,10 +58,10 @@ from picard.util import (
 win32api = None
 if IS_WIN:
     try:
-        import win32api  # isort:skip
         import pywintypes
+        import win32api
     except ImportError as e:
-        log.warning('pywin32 not available: %s', e)
+        log.warning("pywin32 not available: %s", e)
 
 
 def _get_utf16_length(text):
@@ -146,18 +152,23 @@ def _shorten_to_bytes_length(text, length):  # noqa: E302
     return ""
 
 
-SHORTEN_BYTES, SHORTEN_UTF16, SHORTEN_UTF16_NFD = 0, 1, 2
+class ShortenMode(IntEnum):
+    BYTES = 0
+    UTF16 = 1
+    UTF16_NFD = 2
+
+
 def shorten_filename(filename, length, mode):  # noqa: E302
     """Truncates a filename to the given number of thingies,
     as implied by `mode`.
     """
     if isinstance(filename, bytes):
         return filename[:length]
-    if mode == SHORTEN_BYTES:
+    if mode == ShortenMode.BYTES:
         return _shorten_to_bytes_length(filename, length)
-    if mode == SHORTEN_UTF16:
+    if mode == ShortenMode.UTF16:
         return _shorten_to_utf16_length(filename, length)
-    if mode == SHORTEN_UTF16_NFD:
+    if mode == ShortenMode.UTF16_NFD:
         return _shorten_to_utf16_nfd_length(filename, length)
 
 
@@ -166,7 +177,7 @@ def shorten_path(path, length, mode):
 
     path: Absolute or relative path to shorten.
     length: Maximum number of code points / bytes allowed in a node.
-    mode: One of SHORTEN_BYTES, SHORTEN_UTF16, SHORTEN_UTF16_NFD.
+    mode: One of the enum values from ShortenMode.
     """
     def shorten(name, length):
         return name and shorten_filename(name, length, mode).strip() or ""
@@ -205,32 +216,28 @@ def _make_win_short_filename(relpath, reserved=0):
     # http://msdn.microsoft.com/en-us/library/windows/desktop/aa365247(v=vs.85).aspx
     #
     # The MAX_PATH is 260 characters, with this possible format for a file:
-    # "X:\<244-char dir path>\<11-char filename><NUL>".
+    # "X:\<244-char dir path>\<12-char filename><NUL>".
 
-    # Our constraints:
-    # the entire path's length
-    MAX_FILEPATH_LEN = 259
-    # the entire parent directory path's length, *excluding* the final separator
-    MAX_DIRPATH_LEN = 247
-    # a single node's length (this seems to be the case for older NTFS)
-    MAX_NODE_LEN = 226
+    # Use a shorter max node length then the theoretically allowed 255 characters
+    # to leave room for longer file names
+    MAX_NODE_LENGTH = WIN_MAX_NODE_LEN - 29
 
     # to make predictable directory paths we need to fit the directories in
-    # MAX_DIRPATH_LEN, and truncate the filename to whatever's left
-    remaining = MAX_DIRPATH_LEN - reserved
+    # WIN_MAX_DIRPATH_LEN, and truncate the filename to whatever's left
+    remaining = WIN_MAX_DIRPATH_LEN - reserved
 
     # to make things more readable...
     def shorten(path, length):
-        return shorten_path(path, length, mode=SHORTEN_UTF16)
+        return shorten_path(path, length, mode=ShortenMode.UTF16)
     xlength = _get_utf16_length
 
-    # shorten to MAX_NODE_LEN from the beginning
-    relpath = shorten(relpath, MAX_NODE_LEN)
+    # shorten to MAX_NODE_LENGTH from the beginning
+    relpath = shorten(relpath, MAX_NODE_LENGTH)
     dirpath, filename = os.path.split(relpath)
     # what if dirpath is already the right size?
     dplen = xlength(dirpath)
     if dplen <= remaining:
-        filename_max = MAX_FILEPATH_LEN - (reserved + dplen + 1)  # the final separator
+        filename_max = WIN_MAX_FILEPATH_LEN - (reserved + dplen + 1)  # the final separator
         filename = shorten(filename, filename_max)
         return os.path.join(dirpath, filename)
 
@@ -278,7 +285,7 @@ def _make_win_short_filename(relpath, reserved=0):
         # did we win back some chars from .floor()s and .strip()s?
         recovered = remaining - sum(map(xlength, dirnames))
         # so how much do we have left for the filename?
-        filename_max = MAX_FILEPATH_LEN - MAX_DIRPATH_LEN - 1 + recovered
+        filename_max = WIN_MAX_FILEPATH_LEN - WIN_MAX_DIRPATH_LEN - 1 + recovered
         #                                                   ^ the final separator
 
         # and don't forget to cache
@@ -320,25 +327,32 @@ def _get_filename_limit(target):
         limit = limits[target]
     except KeyError:
         # we need to call statvfs on an existing target
-        d = target
-        while not os.path.exists(d):
-            d = os.path.dirname(d)
+        p = Path(target)
+        while not p.exists():
+            p = p.parent
         # XXX http://bugs.python.org/issue18695
-        try:
-            limit = os.statvfs(d).f_namemax
-        except UnicodeEncodeError:
-            limit = os.statvfs(d.encode(_io_encoding)).f_namemax
+        limit = 0
+        while not limit:
+            try:
+                try:
+                    limit = os.statvfs(p).f_namemax
+                except UnicodeEncodeError:
+                    limit = os.statvfs(str(p).encode(_io_encoding)).f_namemax
+            except (FileNotFoundError, PermissionError):
+                if p == p.parent:  # we reached the root
+                    raise
+                p = p.parent
         limits[target] = limit
     return limit
 
 
-def make_short_filename(basedir, relpath, win_compat=False, relative_to=""):
+def make_short_filename(basedir, relpath, win_shorten_path=False, relative_to=""):
     """Shorten a filename's path to proper limits.
 
     basedir: Absolute path of the base directory where files will be moved.
     relpath: File path, relative from the base directory.
-    win_compat: Windows is quirky.
-    relative_to: An ancestor directory of basedir, against which win_compat
+    win_shorten_path: Enforce 259 character limit for the path for Windows compatibility.
+    relative_to: An ancestor directory of basedir, against which win_shorten_path
                  will be applied.
     """
     # only deal with absolute paths. it saves a lot of grief,
@@ -348,10 +362,10 @@ def make_short_filename(basedir, relpath, win_compat=False, relative_to=""):
     except FileNotFoundError:
         # os.path.abspath raises an exception if basedir is a relative path and
         # cwd doesn't exist anymore
-        basedir = QStandardPaths.writableLocation(QStandardPaths.MusicLocation)
+        basedir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MusicLocation)
     # also, make sure the relative path is clean
     relpath = os.path.normpath(relpath)
-    if win_compat and relative_to:
+    if win_shorten_path and relative_to:
         relative_to = os.path.abspath(relative_to)
         assert basedir.startswith(relative_to) and \
             basedir.split(relative_to)[1][:1] in (os.path.sep, ''), \
@@ -360,13 +374,16 @@ def make_short_filename(basedir, relpath, win_compat=False, relative_to=""):
     relpath = os.path.join(*[part.strip() for part in relpath.split(os.path.sep)])
     # if we're on windows, delegate the work to a windows-specific function
     if IS_WIN:
-        reserved = len(basedir)
-        if not basedir.endswith(os.path.sep):
-            reserved += 1
-        return _make_win_short_filename(relpath, reserved)
+        if win_shorten_path:
+            reserved = len(basedir)
+            if not basedir.endswith(os.path.sep):
+                reserved += 1
+            return _make_win_short_filename(relpath, reserved)
+        else:
+            return shorten_path(relpath, WIN_MAX_NODE_LEN, mode=ShortenMode.UTF16)
     # if we're being windows compatible, figure out how much
     # needs to be reserved for the basedir part
-    if win_compat:
+    elif win_shorten_path:
         # if a relative ancestor wasn't provided,
         # use the basedir's mount point
         if not relative_to:
@@ -383,12 +400,12 @@ def make_short_filename(basedir, relpath, win_compat=False, relative_to=""):
     if IS_MACOS:
         # on OS X (i.e. HFS+), this is expressed in UTF-16 code points,
         # in NFD normalization form
-        relpath = shorten_path(relpath, 255, mode=SHORTEN_UTF16_NFD)
+        relpath = shorten_path(relpath, 255, mode=ShortenMode.UTF16_NFD)
     else:
         # on everything else the limit is expressed in bytes,
         # and filesystem-dependent
         limit = _get_filename_limit(basedir)
-        relpath = shorten_path(relpath, limit, mode=SHORTEN_BYTES)
+        relpath = shorten_path(relpath, limit, mode=ShortenMode.BYTES)
     return relpath
 
 
@@ -400,8 +417,15 @@ def samefile_different_casing(path1, path2):
     path2 = os.path.normpath(path2)
     if path1 == path2 or not os.path.exists(path1) or not os.path.exists(path2):
         return False
-    dir1 = os.path.realpath(os.path.normcase(os.path.dirname(path1)))
-    dir2 = os.path.realpath(os.path.normcase(os.path.dirname(path2)))
+    dir1 = os.path.normcase(os.path.dirname(path1))
+    dir2 = os.path.normcase(os.path.dirname(path2))
+    try:
+        dir1 = os.path.realpath(dir1)
+        dir2 = os.path.realpath(dir2)
+    except OSError:
+        # os.path.realpath can fail if cwd does not exist and path is relative
+        # or on Windows if drives are mounted without mount manager.
+        pass
     if dir1 != dir2 or not samefile(path1, path2):
         return False
     file1 = os.path.basename(path1)
@@ -480,6 +504,7 @@ def make_save_path(path, win_compat=False, mac_compat=False):
     - Leading dots in file and directory names will be removed. These files cannot be properly
       handled by Windows Explorer and on Unix like systems they count as hidden
     - If mac_compat is True, normalize precomposed Unicode characters on macOS
+    - Remove unicode zero-width space (\\u200B) from path
 
     Args:
         path: filename or path to clean
@@ -499,6 +524,8 @@ def make_save_path(path, win_compat=False, mac_compat=False):
     # Fix for precomposed characters on macOS.
     if mac_compat:
         path = unicodedata.normalize("NFD", path)
+    # Remove unicode zero-width space (\u200B) from path
+    path = path.replace("\u200B", "")
     return path
 
 

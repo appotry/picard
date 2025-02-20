@@ -2,7 +2,10 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2021 Philipp Wolfer
+# Copyright (C) 2021-2023, 2025 Philipp Wolfer
+# Copyright (C) 2021-2024 Laurent Monin
+# Copyright (C) 2022 Bob Swift
+# Copyright (C) 2022 jesus2099
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -19,15 +22,15 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
+from html import escape
+from operator import attrgetter
 from secrets import token_bytes
 
-from PyQt5.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication
 
 from picard import log
-from picard.util import (
-    format_time,
-    htmlescape,
-)
+from picard.i18n import gettext as _
+from picard.util import format_time
 from picard.util.mbserver import build_submission_url
 from picard.util.webbrowser2 import open
 
@@ -36,7 +39,7 @@ try:
     import jwt
     import jwt.exceptions
 except ImportError:
-    log.debug('PyJWT not available, addrelease functionality disabled')
+    log.debug("PyJWT not available, addrelease functionality disabled")
     jwt = None
 
 __key = token_bytes()  # Generating a new secret on each startup
@@ -88,32 +91,26 @@ def submit_file(file, as_release=False):
 def serve_form(token):
     try:
         payload = jwt.decode(token, __key, algorithms=__algorithm)
-        log.debug('received JWT token %r', payload)
+        log.debug("received JWT token %r", payload)
+        tagger = QCoreApplication.instance()
+        tport = tagger.browser_integration.port
         if 'cluster' in payload:
-            cluster = _find_cluster(payload['cluster'])
+            cluster = _find_cluster(tagger, payload['cluster'])
             if not cluster:
-                raise NotFoundError('Cluster not found')
-            return _get_cluster_form(cluster)
+                raise NotFoundError("Cluster not found")
+            return _get_cluster_form(cluster, tport)
         elif 'file' in payload:
-            file = _find_file(payload['file'])
+            file = _find_file(tagger, payload['file'])
             if not file:
-                raise NotFoundError('File not found')
+                raise NotFoundError("File not found")
             if payload.get('as_release', False):
-                return _get_file_as_release_form(file)
+                return _get_file_as_release_form(file, tport)
             else:
-                return _get_file_as_recording_form(file)
+                return _get_file_as_recording_form(file, tport)
         else:
             raise InvalidTokenError
     except jwt.exceptions.InvalidTokenError:
         raise InvalidTokenError
-
-
-def extract_discnumber(metadata):
-    try:
-        discnumber = metadata.get('discnumber', '1').split('/')[0]
-        return int(discnumber)
-    except ValueError:
-        return 1
 
 
 def _open_url_with_token(payload):
@@ -121,48 +118,48 @@ def _open_url_with_token(payload):
     if isinstance(token, bytes):  # For compatibility with PyJWT 1.x
         token = token.decode()
     browser_integration = QCoreApplication.instance().browser_integration
-    url = 'http://%s:%s/add?token=%s' % (
-        browser_integration.host_address, browser_integration.port, token)
+    url = f'http://127.0.0.1:{browser_integration.port}/add?token={token}'
     open(url)
 
 
-def _find_cluster(cluster_hash):
-    tagger = QCoreApplication.instance()
+def _find_cluster(tagger, cluster_hash):
     for cluster in tagger.clusters:
         if hash(cluster) == cluster_hash:
             return cluster
     return None
 
 
-def _find_file(path):
-    tagger = QCoreApplication.instance()
+def _find_file(tagger, path):
     return tagger.files.get(path, None)
 
 
-def _get_cluster_form(cluster):
+def _get_cluster_form(cluster, tport):
     return _get_form(
-        _('Add cluster as release'),
+        _("Add cluster as release"),
         '/release/add',
-        _('Add cluster as release...'),
-        _get_cluster_data(cluster)
+        _("Add cluster as release…"),
+        _get_cluster_data(cluster),
+        {'tport': tport}
     )
 
 
-def _get_file_as_release_form(cluster):
+def _get_file_as_release_form(file, tport):
     return _get_form(
-        _('Add file as release'),
+        _("Add file as release"),
         '/release/add',
-        _('Add file as release...'),
-        _get_file_as_release_data(cluster)
+        _("Add file as release…"),
+        _get_file_as_release_data(file),
+        {'tport': tport}
     )
 
 
-def _get_file_as_recording_form(cluster):
+def _get_file_as_recording_form(file, tport):
     return _get_form(
-        _('Add file as recording'),
+        _("Add file as recording"),
         '/recording/create',
-        _('Add file as recording...'),
-        _get_file_as_recording_data(cluster)
+        _("Add file as recording…"),
+        _get_file_as_recording_data(file),
+        {'tport': tport}
     )
 
 
@@ -210,14 +207,14 @@ def _add_track_data(data, files):
     disc_counter = 0
     track_counter = 0
     last_discnumber = None
-    for f in files:
+    for f in sorted(files, key=attrgetter('discnumber', 'tracknumber')):
         m = f.metadata
-        discnumber = extract_discnumber(m)
+        discnumber = f.discnumber
         if last_discnumber is not None and discnumber != last_discnumber:
             disc_counter += 1
             track_counter = 0
         last_discnumber = discnumber
-        if m['label']:
+        if m['label'] or m['catalognumber']:
             labels.add((m['label'], m['catalognumber']))
         if m['barcode']:
             barcode = m['barcode']
@@ -238,17 +235,17 @@ def _add_track_data(data, files):
         data['barcode'] = barcode
 
 
-def _get_form(title, action, label, form_data):
+def _get_form(title, action, label, form_data, query_args=None):
     return _form_template.format(
-        title=htmlescape(title),
-        submit_label=htmlescape(label),
-        action=htmlescape(build_submission_url(action)),
+        title=escape(title),
+        submit_label=escape(label),
+        action=escape(build_submission_url(action, query_args)),
         form_data=_format_form_data(form_data),
     )
 
 
 def _format_form_data(data):
-    return ''.join((
-        _form_input_template.format(name=htmlescape(name), value=htmlescape(value))
+    return ''.join(
+        _form_input_template.format(name=escape(name), value=escape(value))
         for name, value in data.items()
-    ))
+    )

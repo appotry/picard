@@ -2,11 +2,11 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2013, 2019-2020 Laurent Monin
+# Copyright (C) 2013, 2019-2023 Laurent Monin
 # Copyright (C) 2014, 2017 Sophist-UK
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2018 Wieland Hoffmann
-# Copyright (C) 2018-2020 Philipp Wolfer
+# Copyright (C) 2018-2020, 2022 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,22 +27,12 @@ import os.path
 
 from test.picardtestcase import PicardTestCase
 
-from picard.i18n import setup_gettext
 from picard.util import bytes2human
 
 
 class Testbytes2human(PicardTestCase):
-    def setUp(self):
-        super().setUp()
-        # we are using temporary locales for tests
-        self.tmp_path = self.mktmpdir()
-        self.localedir = os.path.join(self.tmp_path, 'locale')
-
     def test_00(self):
-        # testing with default C locale, english
-        lang = 'C'
-        setup_gettext(self.localedir, lang)
-        self.run_test(lang)
+        self.run_test()
 
         self.assertEqual(bytes2human.binary(45682), '44.6 KiB')
         self.assertEqual(bytes2human.binary(-45682), '-44.6 KiB')
@@ -89,11 +79,11 @@ class Testbytes2human(PicardTestCase):
     @staticmethod
     def _create_testlist():
         values = [0, 1]
-        for n in [1000, 1024]:
+        for n in (1000, 1024):
             p = 1
             for e in range(0, 6):
                 p *= n
-                for x in [0.1, 0.5, 0.99, 0.9999, 1, 1.5]:
+                for x in (0.1, 0.5, 0.99, 0.9999, 1, 1.5):
                     values.append(int(p * x))
         list = []
         for x in sorted(values):

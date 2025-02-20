@@ -6,13 +6,13 @@
 # Copyright (C) 2006-2008, 2011-2012 Lukáš Lalinský
 # Copyright (C) 2011 Pavan Chander
 # Copyright (C) 2013 Calvin Walton
-# Copyright (C) 2013, 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2013, 2018, 2020-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2014-2015 Sophist-UK
 # Copyright (C) 2015 Ohm Patel
 # Copyright (C) 2015-2016 Wieland Hoffmann
 # Copyright (C) 2016 Rahul Raturi
 # Copyright (C) 2016-2017 Sambhav Kothari
-# Copyright (C) 2020 Philipp Wolfer
+# Copyright (C) 2020, 2022-2023 Philipp Wolfer
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -32,13 +32,12 @@
 import os.path
 import re
 
-from PyQt5 import QtCore
+from PyQt6 import QtCore
 
 from picard import log
-from picard.const import (
-    PICARD_URLS,
-    QUERY_LIMIT,
-)
+from picard.config import get_config
+from picard.const import PICARD_URLS
+from picard.disc import Disc
 from picard.util import (
     build_qurl,
     webbrowser2,
@@ -47,12 +46,23 @@ from picard.util import (
 from picard.ui.searchdialog.album import AlbumSearchDialog
 
 
-class FileLookup(object):
+class FileLookup:
+
+    RE_MB_ENTITY = re.compile(r"""
+        \b(?P<entity>area|artist|instrument|label|place|recording|release|release-group|series|track|url|work)?
+        \W*(?P<id>[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})
+    """, re.VERBOSE | re.IGNORECASE)
+
+    RE_MB_CDTOC = re.compile(r"""
+        \b(?P<entity>cdtoc)
+        \W*(?P<id>[a-z0-9-_.]{28})
+    """, re.VERBOSE | re.IGNORECASE)
 
     def __init__(self, parent, server, port, local_port):
         self.server = server
         self.local_port = int(local_port)
         self.port = port
+        self.tagger = QtCore.QCoreApplication.instance()
 
     def _url(self, path, params=None):
         if params is None:
@@ -68,14 +78,9 @@ class FileLookup(object):
         return self.launch(self._url(path, params))
 
     def launch(self, url):
-        log.debug("webbrowser2: %s" % url)
+        log.debug("webbrowser2: %s", url)
         webbrowser2.open(url)
         return True
-
-    def disc_lookup(self, url):
-        if self.local_port:
-            url = "%s&tport=%d" % (url, self.local_port)
-        return self.launch(url)
 
     def _lookup(self, type_, id_):
         return self._build_launch("/%s/%s" % (type_, id_))
@@ -101,6 +106,11 @@ class FileLookup(object):
     def discid_lookup(self, discid):
         return self._lookup('cdtoc', discid)
 
+    def discid_submission(self, url):
+        if self.local_port:
+            url = "%s&tport=%d" % (url, self.local_port)
+        return self.launch(url)
+
     def acoust_lookup(self, acoust_id):
         return self.launch(PICARD_URLS['acoustid_track'] + acoust_id)
 
@@ -109,58 +119,64 @@ class FileLookup(object):
         If entity type is 'release', it will load corresponding release if
         possible.
         """
-        uuid = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}'
-        entity_type = '(?:release-group|release|recording|work|artist|label|url|area|track)'
-        regex = r"\b(%s)?\W*(%s)" % (entity_type, uuid)
-        m = re.search(regex, string, re.IGNORECASE)
+        m = self.RE_MB_ENTITY.search(string)
         if m is None:
-            return False
-        if m.group(1) is None:
+            m = self.RE_MB_CDTOC.search(string)
+            if m is None:
+                return False
+        entity = m.group('entity')
+        if entity is None:
             if type_ is None:
                 return False
             entity = type_
         else:
-            entity = m.group(1).lower()
-        mbid = m.group(2).lower()
+            entity = entity.lower()
+        id = m.group('id')
+        if entity != 'cdtoc':
+            id = id.lower()
+        log.debug("Lookup for %s:%s", entity, id)
         if mbid_matched_callback:
-            mbid_matched_callback(entity, mbid)
+            mbid_matched_callback(entity, id)
         if entity == 'release':
-            QtCore.QObject.tagger.load_album(mbid)
+            self.tagger.load_album(id)
             return True
         elif entity == 'recording':
-            QtCore.QObject.tagger.load_nat(mbid)
+            self.tagger.load_nat(id)
             return True
         elif entity == 'release-group':
-            dialog = AlbumSearchDialog(QtCore.QObject.tagger.window, force_advanced_search=True)
-            dialog.search("rgid:{0}".format(mbid))
-            dialog.exec_()
+            AlbumSearchDialog.show_releasegroup_search(id)
+            return True
+        elif entity == 'cdtoc':
+            disc = Disc(id=id)
+            disc.lookup()
             return True
         if browser_fallback:
-            return self._lookup(entity, mbid)
+            return self._lookup(entity, id)
         return False
 
-    def tag_lookup(self, artist, release, track, trackNum, duration, filename):
+    def tag_lookup(self, artist, release, track, tracknum, duration, filename):
         params = {
             'artist': artist,
             'release': release,
             'track': track,
-            'tracknum': trackNum,
+            'tracknum': tracknum,
             'duration': duration,
             'filename': os.path.basename(filename),
         }
-        return self._build_launch('/taglookup', params)
+        return self._build_launch("/taglookup", params)
 
     def collection_lookup(self, userid):
-        return self._build_launch('/user/%s/collections' % userid)
+        return self._build_launch("/user/%s/collections" % userid)
 
-    def search_entity(self, type_, query, adv=False, mbid_matched_callback=None):
-        if self.mbid_lookup(query, type_, mbid_matched_callback=mbid_matched_callback):
+    def search_entity(self, type_, query, adv=False, mbid_matched_callback=None, force_browser=False):
+        if not force_browser and self.mbid_lookup(query, type_, mbid_matched_callback=mbid_matched_callback):
             return True
+        config = get_config()
         params = {
-            'limit': QUERY_LIMIT,
+            'limit': config.setting['query_limit'],
             'type': type_,
             'query': query,
         }
         if adv:
             params['adv'] = 'on'
-        return self._build_launch('/search/textsearch', params)
+        return self._build_launch("/search/textsearch", params)

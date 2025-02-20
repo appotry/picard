@@ -4,9 +4,9 @@
 #
 # Copyright (C) 2007 Lukáš Lalinský
 # Copyright (C) 2009 Carlin Mangar
-# Copyright (C) 2009, 2018-2021 Philipp Wolfer
+# Copyright (C) 2009, 2018-2023 Philipp Wolfer
 # Copyright (C) 2011-2013 Michael Wiencek
-# Copyright (C) 2013, 2015, 2018-2021 Laurent Monin
+# Copyright (C) 2013, 2015, 2018-2024 Laurent Monin
 # Copyright (C) 2013, 2017 Sophist-UK
 # Copyright (C) 2014 Shadab Zafar
 # Copyright (C) 2015, 2017 Wieland Hoffmann
@@ -14,6 +14,7 @@
 # Copyright (C) 2017 Suhas
 # Copyright (C) 2018 Vishal Choudhary
 # Copyright (C) 2018 yagyanshbhatia
+# Copyright (C) 2023 tuspar
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -31,34 +32,40 @@
 
 
 from functools import partial
+from html import escape
 from operator import attrgetter
 import os.path
+import re
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
 )
-from PyQt5.QtWidgets import QTreeWidgetItemIterator
+from PyQt6.QtWidgets import QTreeWidgetItemIterator
 
 from picard import log
-from picard.config import (
-    ListOption,
-    Option,
-    get_config,
-)
+from picard.config import get_config
 from picard.const import (
     PLUGINS_API,
     USER_PLUGIN_DIR,
 )
-from picard.util import reconnect
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import (
+    N_,
+    gettext as _,
+)
+from picard.util import (
+    icontheme,
+    open_local_path,
+    reconnect,
+)
 
 from picard.ui import HashableTreeWidgetItem
-from picard.ui.options import (
-    OptionsPage,
-    register_options_page,
-)
-from picard.ui.ui_options_plugins import Ui_PluginsOptionsPage
+from picard.ui.forms.ui_options_plugins import Ui_PluginsOptionsPage
+from picard.ui.options import OptionsPage
+from picard.ui.theme import theme
+from picard.ui.util import FileDialog
 
 
 COLUMN_NAME, COLUMN_VERSION, COLUMN_ACTIONS = range(3)
@@ -67,13 +74,13 @@ COLUMN_NAME, COLUMN_VERSION, COLUMN_ACTIONS = range(3)
 class PluginActionButton(QtWidgets.QToolButton):
 
     def __init__(self, icon=None, tooltip=None, retain_space=False,
-                 switch_method=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+                 switch_method=None, parent=None):
+        super().__init__(parent=parent)
         if tooltip is not None:
             self.setToolTip(tooltip)
 
         if icon is not None:
-            self.set_icon(self, icon)
+            self.setIcon(self, icon)
 
         if retain_space is True:
             sp_retain = self.sizePolicy()
@@ -86,11 +93,18 @@ class PluginActionButton(QtWidgets.QToolButton):
         if self.switch_method is not None:
             self.switch_method(self, mode)
 
+    def setIcon(self, icon):
+        super().setIcon(icon)
+        # Workaround for Qt sometimes not updating the icon.
+        # See https://tickets.metabrainz.org/browse/PICARD-1647
+        self.repaint()
+
 
 class PluginTreeWidgetItem(HashableTreeWidgetItem):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, icons, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._icons = icons
         self._sortData = {}
         self.upgrade_to_version = None
         self.new_version = None
@@ -104,7 +118,7 @@ class PluginTreeWidgetItem(HashableTreeWidgetItem):
         self.buttons_widget = QtWidgets.QWidget()
 
         layout = QtWidgets.QHBoxLayout()
-        layout.setContentsMargins(0, 0, 5, 0)
+        layout.setContentsMargins(0, 2, 5, 2)
         layout.addStretch(1)
         self.buttons_widget.setLayout(layout)
 
@@ -122,38 +136,31 @@ class PluginTreeWidgetItem(HashableTreeWidgetItem):
         self.treeWidget().setItemWidget(self, COLUMN_ACTIONS,
                                         self.buttons_widget)
 
-    @staticmethod
-    def set_icon(button, stdicon):
-        button.setIcon(button.style().standardIcon(getattr(QtWidgets.QStyle, stdicon)))
-        # Workaround for Qt sometimes not updating the icon.
-        # See https://tickets.metabrainz.org/browse/PICARD-1647
-        button.repaint()
-
     def show_install(self, button, mode):
         if mode == 'hide':
             button.hide()
         else:
             button.show()
             button.setToolTip(_("Download and install plugin"))
-            self.set_icon(button, 'SP_ArrowDown')
+            button.setIcon(self._icons['download'])
 
     def show_update(self, button, mode):
         if mode == 'hide':
             button.hide()
         else:
             button.show()
-            button.setToolTip(_("Download and upgrade plugin to version %s") % self.new_version.to_string(short=True))
-            self.set_icon(button, 'SP_BrowserReload')
+            button.setToolTip(_("Download and upgrade plugin to version %s") % self.new_version.short_str())
+            button.setIcon(self._icons['update'])
 
     def show_enable(self, button, mode):
         if mode == 'enabled':
             button.show()
             button.setToolTip(_("Enabled"))
-            self.set_icon(button, 'SP_DialogApplyButton')
+            button.setIcon(self._icons['enabled'])
         elif mode == 'disabled':
             button.show()
             button.setToolTip(_("Disabled"))
-            self.set_icon(button, 'SP_DialogCancelButton')
+            button.setIcon(self._icons['disabled'])
         else:
             button.hide()
 
@@ -163,7 +170,7 @@ class PluginTreeWidgetItem(HashableTreeWidgetItem):
         else:
             button.show()
             button.setToolTip(_("Uninstall plugin"))
-            self.set_icon(button, 'SP_TrashIcon')
+            button.setIcon(self._icons['uninstall'])
 
     def save_state(self):
         return {
@@ -199,7 +206,7 @@ class PluginTreeWidgetItem(HashableTreeWidgetItem):
 
     @property
     def plugin(self):
-        return self.data(COLUMN_NAME, QtCore.Qt.UserRole)
+        return self.data(COLUMN_NAME, QtCore.Qt.ItemDataRole.UserRole)
 
     def enable(self, boolean, greyout=None):
         if boolean is not None:
@@ -214,22 +221,15 @@ class PluginTreeWidgetItem(HashableTreeWidgetItem):
 
 class PluginsOptionsPage(OptionsPage):
 
-    NAME = "plugins"
+    NAME = 'plugins'
     TITLE = N_("Plugins")
     PARENT = None
     SORT_ORDER = 70
     ACTIVE = True
-    HELP_URL = '/config/options_plugins.html'
-
-    options = [
-        ListOption("setting", "enabled_plugins", []),
-        Option("persist", "plugins_list_state", QtCore.QByteArray()),
-        Option("persist", "plugins_list_sort_section", 0),
-        Option("persist", "plugins_list_sort_order", QtCore.Qt.AscendingOrder),
-    ]
+    HELP_URL = "/config/options_plugins.html"
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = Ui_PluginsOptionsPage()
         self.ui.setupUi(self)
         plugins = self.ui.plugins
@@ -241,6 +241,7 @@ class PluginsOptionsPage(OptionsPage):
         plugins.mimeTypes = self.mimeTypes
         plugins.dropEvent = self.dropEvent
         plugins.dragEnterEvent = self.dragEnterEvent
+        plugins.dragMoveEvent = self.dragMoveEvent
 
         self.ui.install_plugin.clicked.connect(self.open_plugins)
         self.ui.folder_open.clicked.connect(self.open_plugin_dir)
@@ -255,8 +256,21 @@ class PluginsOptionsPage(OptionsPage):
         self._preserve = {}
         self._preserve_selected = None
 
+        self.icons = {
+            'download': self.create_icon('plugin-download'),
+            'update': self.create_icon('plugin-update'),
+            'uninstall': self.create_icon('plugin-uninstall'),
+            'enabled': self.create_icon('plugin-enabled'),
+            'disabled': self.create_icon('plugin-disabled'),
+        }
+
+    def create_icon(self, icon_name):
+        if theme.is_dark_theme:
+            icon_name += '-dark'
+        return icontheme.lookup(icon_name, icontheme.ICON_SIZE_MENU)
+
     def items(self):
-        iterator = QTreeWidgetItemIterator(self.ui.plugins, QTreeWidgetItemIterator.All)
+        iterator = QTreeWidgetItemIterator(self.ui.plugins, QTreeWidgetItemIterator.IteratorFlag.All)
         while iterator.value():
             item = iterator.value()
             iterator += 1
@@ -277,9 +291,9 @@ class PluginsOptionsPage(OptionsPage):
     def save_state(self):
         header = self.ui.plugins.header()
         config = get_config()
-        config.persist["plugins_list_state"] = header.saveState()
-        config.persist["plugins_list_sort_section"] = header.sortIndicatorSection()
-        config.persist["plugins_list_sort_order"] = header.sortIndicatorOrder()
+        config.persist['plugins_list_state'] = header.saveState()
+        config.persist['plugins_list_sort_section'] = header.sortIndicatorSection()
+        config.persist['plugins_list_sort_order'] = header.sortIndicatorOrder()
 
     def set_current_item(self, item, scroll=False):
         if scroll:
@@ -290,16 +304,16 @@ class PluginsOptionsPage(OptionsPage):
     def restore_state(self):
         header = self.ui.plugins.header()
         config = get_config()
-        header.restoreState(config.persist["plugins_list_state"])
-        idx = config.persist["plugins_list_sort_section"]
-        order = config.persist["plugins_list_sort_order"]
+        header.restoreState(config.persist['plugins_list_state'])
+        idx = config.persist['plugins_list_sort_section']
+        order = config.persist['plugins_list_sort_order']
         header.setSortIndicator(idx, order)
         self.ui.plugins.sortByColumn(idx, order)
 
     @staticmethod
     def is_plugin_enabled(plugin):
         config = get_config()
-        return bool(plugin.module_name in config.setting["enabled_plugins"])
+        return bool(plugin.module_name in config.setting['enabled_plugins'])
 
     def available_plugins_name_version(self):
         return {p.module_name: p.version for p in self.manager.available_plugins}
@@ -350,10 +364,10 @@ class PluginsOptionsPage(OptionsPage):
         self._user_interaction(True)
         header = self.ui.plugins.header()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
-        header.setSectionResizeMode(COLUMN_NAME, QtWidgets.QHeaderView.Stretch)
-        header.setSectionResizeMode(COLUMN_VERSION, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COLUMN_ACTIONS, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(COLUMN_NAME, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(COLUMN_VERSION, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COLUMN_ACTIONS, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
     def _remove_all(self):
         for item in self.items():
@@ -398,7 +412,7 @@ class PluginsOptionsPage(OptionsPage):
         self.ui.plugins_container.setEnabled(enabled)
 
     def reload_list_of_plugins(self):
-        self.ui.details.setText(_("Reloading list of available plugins..."))
+        self.ui.details.setText(_("Reloading list of available plugins…"))
         self._user_interaction(False)
         self._preserve_plugins_states()
         self.manager.query_available_plugins(callback=self._reload)
@@ -406,17 +420,20 @@ class PluginsOptionsPage(OptionsPage):
     def plugin_loading_error(self, plugin_name, error):
         QtWidgets.QMessageBox.critical(
             self,
-            _("Plugin '%s'") % plugin_name,
-            _("An error occurred while loading the plugin '%s':\n\n%s") % (plugin_name, error)
-        )
+            _('Plugin "%(plugin)s"') % {'plugin': plugin_name},
+            _('An error occurred while loading the plugin "%(plugin)s":\n\n%(error)s') % {
+                'plugin': plugin_name,
+                'error': error,
+            })
 
     def plugin_installed(self, plugin):
         log.debug("Plugin %r installed", plugin.name)
         if not plugin.compatible:
+            params = {'plugin': plugin.name}
             QtWidgets.QMessageBox.warning(
                 self,
-                _("Plugin '%s'") % plugin.name,
-                _("The plugin '%s' is not compatible with this version of Picard.") % plugin.name
+                _('Plugin "%(plugin)s"') % params,
+                _('The plugin "%(plugin)s" is not compatible with this version of Picard.') % params
             )
             return
         item = self.find_item_by_plugin_name(plugin.module_name)
@@ -436,10 +453,11 @@ class PluginsOptionsPage(OptionsPage):
             plugin = item.plugin
             QtWidgets.QMessageBox.information(
                 self,
-                _("Plugin '%s'") % plugin_name,
-                _("The plugin '%s' will be upgraded to version %s on next run of Picard.")
-                % (plugin.name, item.new_version.to_string(short=True))
-            )
+                _('Plugin "%(plugin)s"') % {'plugin': plugin_name},
+                _('The plugin "%(plugin)s" will be upgraded to version %(version)s on next run of Picard.') % {
+                    'plugin': plugin.name,
+                    'version': item.new_version.short_str(),
+                })
 
             item.upgrade_to_version = item.new_version
             self.update_plugin_item(item, plugin, make_current=True)
@@ -456,14 +474,15 @@ class PluginsOptionsPage(OptionsPage):
 
     def uninstall_plugin(self, item):
         plugin = item.plugin
+        params = {'plugin': plugin.name}
         buttonReply = QtWidgets.QMessageBox.question(
             self,
-            _("Uninstall plugin '%s'?") % plugin.name,
-            _("Do you really want to uninstall the plugin '%s' ?") % plugin.name,
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No
+            _('Uninstall plugin "%(plugin)s"?') % params,
+            _('Do you really want to uninstall the plugin "%(plugin)s"?') % params,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No
         )
-        if buttonReply == QtWidgets.QMessageBox.Yes:
+        if buttonReply == QtWidgets.QMessageBox.StandardButton.Yes:
             self.manager.remove_plugin(plugin.module_name, with_update=True)
 
     def update_plugin_item(self, item, plugin,
@@ -473,9 +492,9 @@ class PluginsOptionsPage(OptionsPage):
                            is_installed=None
                            ):
         if item is None:
-            item = PluginTreeWidgetItem(self.ui.plugins)
+            item = PluginTreeWidgetItem(self.icons, self.ui.plugins)
         if plugin is not None:
-            item.setData(COLUMN_NAME, QtCore.Qt.UserRole, plugin)
+            item.setData(COLUMN_NAME, QtCore.Qt.ItemDataRole.UserRole, plugin)
         else:
             plugin = item.plugin
         if new_version is not None:
@@ -487,10 +506,10 @@ class PluginsOptionsPage(OptionsPage):
 
         def update_text():
             if item.new_version is not None:
-                version = "%s → %s" % (plugin.version.to_string(short=True),
-                                       item.new_version.to_string(short=True))
+                version = "%s → %s" % (plugin.version.short_str(),
+                                       item.new_version.short_str())
             else:
-                version = plugin.version.to_string(short=True)
+                version = plugin.version.short_str()
 
             if item.installed_font is None:
                 item.installed_font = item.font(COLUMN_NAME)
@@ -583,7 +602,7 @@ class PluginsOptionsPage(OptionsPage):
 
     def save(self):
         config = get_config()
-        config.setting["enabled_plugins"] = self.enabled_plugins()
+        config.setting['enabled_plugins'] = self.enabled_plugins()
         self.save_state()
 
     def refresh_details(self, item):
@@ -594,20 +613,46 @@ class PluginsOptionsPage(OptionsPage):
                 label = _("Restart Picard to upgrade to new version")
             else:
                 label = _("New version available")
-            version_str = item.new_version.to_string(short=True)
+            version_str = item.new_version.short_str()
             text.append("<b>{0}: {1}</b>".format(label, version_str))
         if plugin.description:
             text.append(plugin.description + "<hr width='90%'/>")
         infos = [
-            (_("Name"), plugin.name),
-            (_("Authors"), plugin.author),
+            (_("Name"), escape(plugin.name)),
+            (_("Authors"), self.link_authors(plugin.author)),
             (_("License"), plugin.license),
-            (_("Files"), plugin.files_list),
+            (_("Files"), escape(plugin.files_list)),
+            (_("User Guide"), self.link_user_guide(plugin.user_guide_url)),
         ]
         for label, value in infos:
             if value:
                 text.append("<b>{0}:</b> {1}".format(label, value))
         self.ui.details.setText("<p>{0}</p>".format("<br/>\n".join(text)))
+
+    @staticmethod
+    def link_authors(authors):
+        formatted_authors = []
+        re_author = re.compile(r"(?P<author>.*?)\s*<(?P<email>.*?@.*?)>")
+        for author in authors.split(','):
+            author = author.strip()
+            match_ = re_author.fullmatch(author)
+            if match_:
+                author_str = '<a href="mailto:{email}">{author}</a>'.format(
+                    email=escape(match_['email']),
+                    author=escape(match_['author']),
+                )
+                formatted_authors.append(author_str)
+            else:
+                formatted_authors.append(escape(author))
+        return ', '.join(formatted_authors)
+
+    @staticmethod
+    def link_user_guide(user_guide):
+        if user_guide:
+            user_guide = '<a href="{url}">{url}</a>'.format(
+                url=escape(user_guide)
+            )
+        return user_guide
 
     def change_details(self):
         item = self.selected_item()
@@ -615,11 +660,10 @@ class PluginsOptionsPage(OptionsPage):
             self.refresh_details(item)
 
     def open_plugins(self):
-        files, _filter = QtWidgets.QFileDialog.getOpenFileNames(
-            self,
-            "",
-            QtCore.QDir.homePath(),
-            "Picard plugin (*.py *.pyc *.zip)"
+        files, _filter = FileDialog.getOpenFileNames(
+            parent=self,
+            dir=QtCore.QDir.homePath(),
+            filter="Picard plugin (*.py *.pyc *.zip)",
         )
         if files:
             for path in files:
@@ -628,26 +672,27 @@ class PluginsOptionsPage(OptionsPage):
     def download_plugin(self, item, update=False):
         plugin = item.plugin
 
-        self.tagger.webservice.get(
-            PLUGINS_API['host'],
-            PLUGINS_API['port'],
-            PLUGINS_API['endpoint']['download'],
-            partial(self.download_handler, update, plugin=plugin),
+        self.tagger.webservice.get_url(
+            url=PLUGINS_API['urls']['download'],
+            handler=partial(self.download_handler, update, plugin=plugin),
             parse_response_type=None,
             priority=True,
             important=True,
-            queryargs={"id": plugin.module_name, "version": plugin.version.to_string(short=True)}
+            unencoded_queryargs={'id': plugin.module_name, 'version': plugin.version.short_str()},
         )
 
     def download_handler(self, update, response, reply, error, plugin):
+        if self.deleted:
+            return
         if error:
+            params = {'plugin': plugin.module_name}
             msgbox = QtWidgets.QMessageBox(self)
-            msgbox.setText(_("The plugin '%s' could not be downloaded.") % plugin.module_name)
+            msgbox.setText(_('The plugin "%(plugin)s" could not be downloaded.') % params)
             msgbox.setInformativeText(_("Please try again later."))
-            msgbox.setStandardButtons(QtWidgets.QMessageBox.Ok)
-            msgbox.setDefaultButton(QtWidgets.QMessageBox.Ok)
-            msgbox.exec_()
-            log.error("Error occurred while trying to download the plugin: '%s'" % plugin.module_name)
+            msgbox.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+            msgbox.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Ok)
+            msgbox.exec()
+            log.error('Error occurred while trying to download the plugin: "%(plugin)s"', params)
             return
 
         self.manager.install_plugin(
@@ -659,18 +704,29 @@ class PluginsOptionsPage(OptionsPage):
 
     @staticmethod
     def open_plugin_dir():
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(USER_PLUGIN_DIR))
+        open_local_path(USER_PLUGIN_DIR)
 
     def mimeTypes(self):
-        return ["text/uri-list"]
+        return ['text/uri-list']
 
     def dragEnterEvent(self, event):
-        event.setDropAction(QtCore.Qt.CopyAction)
+        event.setDropAction(QtCore.Qt.DropAction.CopyAction)
+        event.accept()
+
+    def dragMoveEvent(self, event):
+        event.setDropAction(QtCore.Qt.DropAction.CopyAction)
         event.accept()
 
     def dropEvent(self, event):
-        for path in [os.path.normpath(u.toLocalFile()) for u in event.mimeData().urls()]:
+        if event.proposedAction() == QtCore.Qt.DropAction.IgnoreAction:
+            event.acceptProposedAction()
+            return
+
+        for path in (os.path.normpath(u.toLocalFile()) for u in event.mimeData().urls()):
             self.manager.install_plugin(path)
+
+        event.setDropAction(QtCore.Qt.DropAction.CopyAction)
+        event.accept()
 
 
 register_options_page(PluginsOptionsPage)

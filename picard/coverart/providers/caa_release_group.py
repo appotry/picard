@@ -2,7 +2,7 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2014-2016, 2018-2021 Laurent Monin
+# Copyright (C) 2014-2016, 2018-2021, 2023-2024 Laurent Monin
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2020 Philipp Wolfer
 #
@@ -26,6 +26,7 @@ from picard.coverart.image import (
     CaaThumbnailCoverArtImage,
 )
 from picard.coverart.providers.caa import CoverArtProviderCaa
+from picard.i18n import N_
 
 
 class CaaCoverArtImageRg(CaaCoverArtImage):
@@ -54,4 +55,4 @@ class CoverArtProviderCaaReleaseGroup(CoverArtProviderCaa):
 
     @property
     def _caa_path(self):
-        return "/release-group/%s/" % self.metadata["musicbrainz_releasegroupid"]
+        return "/release-group/%s/" % self.metadata['musicbrainz_releasegroupid']

@@ -6,7 +6,7 @@
 # Copyright (C) 2006-2008, 2011-2014, 2017 Lukáš Lalinský
 # Copyright (C) 2007 Santiago M. Mola
 # Copyright (C) 2008 Robert Kaye
-# Copyright (C) 2008-2009, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008-2009, 2018-2024 Philipp Wolfer
 # Copyright (C) 2009 Carlin Mangar
 # Copyright (C) 2011-2012, 2014, 2016-2018 Wieland Hoffmann
 # Copyright (C) 2011-2014 Michael Wiencek
@@ -39,12 +39,9 @@
 
 
 import datetime
-from distutils import log
-from distutils.command.build import build
-from distutils.dep_util import newer
-from distutils.spawn import find_executable
 import glob
 from io import StringIO
+import logging as log
 import os
 import re
 import stat
@@ -56,10 +53,20 @@ from setuptools import (
     Extension,
     setup,
 )
-from setuptools.command.install import install as install
+from setuptools.command.install import install
 from setuptools.dist import Distribution
 
-from picard import (
+
+try:
+    from setuptools.command.build import build
+except ImportError:
+    from distutils.command.build import build
+
+# required for PEP 517
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+
+from picard import (  # noqa: E402
     PICARD_APP_ID,
     PICARD_APP_NAME,
     PICARD_DESKTOP_NAME,
@@ -69,18 +76,31 @@ from picard import (
 )
 
 
-if sys.version_info < (3, 6):
-    sys.exit("ERROR: You need Python 3.6 or higher to use Picard.")
+if sys.version_info < (3, 9):
+    sys.exit("ERROR: You need Python 3.9 or higher to use Picard.")
 
 PACKAGE_NAME = "picard"
 APPDATA_FILE = PICARD_APP_ID + '.appdata.xml'
 APPDATA_FILE_TEMPLATE = APPDATA_FILE + '.in'
+DESKTOP_FILE = PICARD_APP_ID + '.desktop'
+DESKTOP_FILE_TEMPLATE = DESKTOP_FILE + '.in'
 
 ext_modules = [
     Extension('picard.util._astrcmp', sources=['picard/util/_astrcmp.c']),
 ]
 
-tx_executable = find_executable('tx')
+
+def newer(source, target):
+    """Return true if 'source' exists and is more recently modified than
+    'target', or if 'source' exists and 'target' doesn't.  Return false if
+    both exist and 'target' is the same age or younger than 'source'.
+    Raise FileNotFoundError if 'source' does not exist.
+    """
+    if not os.path.exists(source):
+        raise FileNotFoundError('file "%s" does not exist' % os.path.abspath(source))
+    if not os.path.exists(target):
+        return True
+    return os.path.getmtime(source) > os.path.getmtime(target)
 
 
 class picard_test(Command):
@@ -235,10 +255,8 @@ class picard_build(build):
         ('build-number=', None, 'build number (integer)'),
     ]
 
-    sub_commands = build.sub_commands
-
     def initialize_options(self):
-        build.initialize_options(self)
+        super().initialize_options()
         self.build_number = 0
         self.build_locales = None
         self.localedir = None
@@ -246,7 +264,7 @@ class picard_build(build):
         self.disable_locales = None
 
     def finalize_options(self):
-        build.finalize_options(self)
+        super().finalize_options()
         try:
             self.build_number = int(self.build_number)
         except ValueError:
@@ -285,7 +303,10 @@ class picard_build(build):
             generate_file('win-version-info.txt.in', 'win-version-info.txt', {**args, **version_args})
 
             default_publisher = 'CN=Metabrainz Foundation Inc., O=Metabrainz Foundation Inc., L=San Luis Obispo, S=California, C=US'
-            store_version = (PICARD_VERSION.major, PICARD_VERSION.minor, PICARD_VERSION.patch * 10000 + self.build_number, 0)
+            # Combine patch version with build number. As Windows store apps require continuously
+            # growing version numbers we combine the patch version with a build number set by the
+            # build script.
+            store_version = (PICARD_VERSION.major, PICARD_VERSION.minor, PICARD_VERSION.patch * 1000 + min(self.build_number, 999), 0)
             generate_file('appxmanifest.xml.in', 'appxmanifest.xml', {
                 'app-id': "MetaBrainzFoundationInc." + PICARD_APP_ID,
                 'display-name': PICARD_DISPLAY_NAME,
@@ -295,7 +316,8 @@ class picard_build(build):
             })
         elif sys.platform not in {'darwin', 'haiku1', 'win32'}:
             self.run_command('build_appdata')
-        build.run(self)
+            self.run_command('build_desktop_file')
+        super().run()
 
 
 def py_from_ui(uifile):
@@ -303,7 +325,7 @@ def py_from_ui(uifile):
 
 
 def py_from_ui_with_defaultdir(uifile):
-    return os.path.join("picard", "ui", py_from_ui(uifile))
+    return os.path.join('picard', 'ui', 'forms', py_from_ui(uifile))
 
 
 def ui_files():
@@ -329,7 +351,7 @@ class picard_build_ui(Command):
                 if m:
                     name = m.group(1)
                 else:
-                    log.warn('ignoring %r (cannot extract base name)' % f)
+                    log.warn('ignoring %r (cannot extract base name)', f)
                     continue
                 uiname = name + '.ui'
                 uifile = os.path.join(head, uiname)
@@ -343,34 +365,52 @@ class picard_build_ui(Command):
                         files.append((uifile,
                                       py_from_ui_with_defaultdir(uifile)))
                     else:
-                        log.warn('ignoring %r' % f)
+                        log.warn('ignoring %r', f)
             self.files = files
 
     def run(self):
-        from PyQt5 import uic
+        from PyQt6 import uic
+
         _translate_re = (
-            re.compile(
+            (re.compile(r'(\s+_translate = QtCore\.QCoreApplication\.translate)'), r''),
+            (re.compile(
                 r'QtGui\.QApplication.translate\(.*?, (.*?), None, '
-                r'QtGui\.QApplication\.UnicodeUTF8\)'),
-            re.compile(
-                r'\b_translate\(.*?, (.*?)(?:, None)?\)')
+                r'QtGui\.QApplication\.UnicodeUTF8\)'), r'_(\1)'),
+            (re.compile(r'\b_translate\(.*?, (.*?)(?:, None)?\)'), r'_(\1)'),
         )
 
         def compile_ui(uifile, pyfile):
-            log.info("compiling %s -> %s", uifile, pyfile)
             tmp = StringIO()
+            log.info("compiling %s -> %s", uifile, pyfile)
             uic.compileUi(uifile, tmp)
             source = tmp.getvalue()
-            rc = re.compile(r'\n\n#.*?(?=\n\n)', re.MULTILINE | re.DOTALL)
-            comment = ("\n\n# Automatically generated - don't edit.\n"
-                       "# Use `python setup.py %s` to update it."
-                       % _get_option_name(self))
-            for r in list(_translate_re):
-                source = r.sub(r'_(\1)', source)
-                source = rc.sub(comment, source)
-            f = open(pyfile, "w")
-            f.write(source)
-            f.close()
+
+            # replace QT translations stuff by ours
+            for matcher, replacement in _translate_re:
+                source = matcher.sub(replacement, source)
+
+            # replace headers
+            rc = re.compile(r'\n# WARNING.*?(?=\nclass )', re.MULTILINE | re.DOTALL)
+
+            command = _get_option_name(self)
+            new_header = f"""
+# Automatically generated - do not edit.
+# Use `python setup.py {command}` to update it.
+
+from PyQt6 import (
+    QtCore,
+    QtGui,
+    QtWidgets,
+)
+
+from picard.i18n import gettext as _
+
+"""
+            source = rc.sub(new_header, source)
+
+            # save to final file
+            with open(pyfile, "w") as f:
+                f.write(source)
 
         if self.files:
             for uifile, pyfile in self.files:
@@ -380,7 +420,10 @@ class picard_build_ui(Command):
                 if newer(uifile, pyfile):
                     compile_ui(uifile, pyfile)
 
-        from resources import compile, makeqrc
+        from resources import (
+            compile,
+            makeqrc,
+        )
         makeqrc.main()
         compile.main()
 
@@ -445,8 +488,27 @@ class picard_build_appdata(Command):
             generate_file(source_file, APPDATA_FILE, args)
 
 
+class picard_build_desktop_file(Command):
+    description = 'Build XDG desktop file'
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        self.spawn([
+            'msgfmt', '--desktop',
+            '--template=%s' % DESKTOP_FILE_TEMPLATE,
+            '-d', 'po/appstream',
+            '-o', DESKTOP_FILE,
+        ])
+
+
 class picard_regen_appdata_pot_file(Command):
-    description = 'Regenerate translations from appdata metadata template'
+    description = 'Regenerate translations from appdata metadata and XDG desktop file templates'
     user_options = []
 
     def initialize_options(self):
@@ -464,6 +526,13 @@ class picard_regen_appdata_pot_file(Command):
             '--language=appdata',
             APPDATA_FILE_TEMPLATE,
         ])
+        self.spawn([
+            'xgettext',
+            '--output', pot_file,
+            '--language=desktop',
+            '--join-existing',
+            DESKTOP_FILE_TEMPLATE,
+        ])
         for filepath in glob.glob(os.path.join(output_dir, '*.po')):
             self.spawn([
                 'msgmerge',
@@ -473,68 +542,27 @@ class picard_regen_appdata_pot_file(Command):
             ])
 
 
-class picard_pull_translations(Command):
-    description = "Retrieve po files from transifex"
-    minimum_perc_default = 5
-    user_options = [
-        ('minimum-perc=', 'm',
-         "Specify the minimum acceptable percentage of a translation (default: %d)" % minimum_perc_default)
-    ]
-
-    def initialize_options(self):
-        self.minimum_perc = self.minimum_perc_default
-
-    def finalize_options(self):
-        self.minimum_perc = int(self.minimum_perc)
-
-    def run(self):
-        if tx_executable is None:
-            sys.exit('Transifex client executable (tx) not found.')
-        self.spawn([
-            tx_executable,
-            'pull',
-            '--force',
-            '--all',
-            '--minimum-perc=%d' % self.minimum_perc
-        ])
-        self.spawn([
-            tx_executable,
-            'pull',
-            '--force',
-            '--resource',
-            'musicbrainz.picard',
-            '--language',
-            'en_AU,en_GB,en_CA'
-        ])
-
-
 _regen_pot_description = "Regenerate po/picard.pot, parsing source tree for new or updated strings"
+_regen_constants_pot_description = "Regenerate po/constants/constants.pot, parsing source tree for new or updated strings"
 try:
-    from babel import __version__ as babel_version
     from babel.messages import frontend as babel
-
-    def versiontuple(v):
-        return tuple(map(int, (v.split("."))))
-
-    # input_dirs are incorrectly handled in babel versions < 1.0
-    # http://babel.edgewall.org/ticket/232
-    input_dirs_workaround = versiontuple(babel_version) < (1, 0, 0)
 
     class picard_regen_pot_file(babel.extract_messages):
         description = _regen_pot_description
 
         def initialize_options(self):
-            # cannot use super() with old-style parent class
-            babel.extract_messages.initialize_options(self)
+            super().initialize_options()
             self.output_file = 'po/picard.pot'
             self.input_dirs = 'picard'
-            if self.input_dirs and input_dirs_workaround:
-                self._input_dirs = self.input_dirs
+            self.ignore_dirs = ('const',)
 
-        def finalize_options(self):
-            babel.extract_messages.finalize_options(self)
-            if input_dirs_workaround and self._input_dirs:
-                self.input_dirs = re.split(r',\s*', self._input_dirs)
+    class picard_regen_constants_pot_file(babel.extract_messages):
+        description = _regen_constants_pot_description
+
+        def initialize_options(self):
+            super().initialize_options()
+            self.output_file = 'po/constants/constants.pot'
+            self.input_dirs = 'picard/const'
 
 except ImportError:
     class picard_regen_pot_file(Command):
@@ -550,6 +578,9 @@ except ImportError:
         def run(self):
             sys.exit("Babel is required to use this command (see po/README.md)")
 
+    class picard_regen_constants_pot_file(picard_regen_pot_file):
+        description = _regen_constants_pot_description
+
 
 def _get_option_name(obj):
     """Returns the name of the option for specified Command object"""
@@ -562,32 +593,29 @@ def _get_option_name(obj):
 class picard_update_constants(Command):
     description = "Regenerate attributes.py and countries.py"
     user_options = [
-        ('skip-pull', None, "skip the tx pull steps"),
+        ('skip-pull', None, "skip the translation pull step"),
+        ('weblate-key=', None, "Weblate API key"),
     ]
     boolean_options = ['skip-pull']
 
     def initialize_options(self):
         self.skip_pull = None
+        self.weblate_key = None
 
     def finalize_options(self):
         self.locales = self.distribution.locales
 
     def run(self):
-        if tx_executable is None:
-            sys.exit('Transifex client executable (tx) not found.')
-
         from babel.messages import pofile
 
         if not self.skip_pull:
-            txpull_cmd = [
-                tx_executable,
-                'pull',
-                '--force',
-                '--resource=musicbrainz.attributes,musicbrainz.countries',
-                '--source',
-                '--language=none',
+            cmd = [
+                os.path.join(os.path.dirname(__file__), 'scripts', 'tools', 'pull-shared-translations.py'),
             ]
-            self.spawn(txpull_cmd)
+            if self.weblate_key:
+                cmd.append('--key')
+                cmd.append(self.weblate_key)
+            self.spawn(cmd)
 
         countries = dict()
         countries_potfile = os.path.join('po', 'countries', 'countries.pot')
@@ -647,8 +675,7 @@ class picard_update_constants(Command):
             for code, name in sorted(countries.items(), key=lambda t: t[0]):
                 write(line, code=code, name=name.replace("'", "\\'"))
             write(footer)
-            log.info("%s was rewritten (%d countries)" % (filename,
-                                                          len(countries)))
+            log.info("%s was rewritten (%d countries)", filename, len(countries))
 
     def attributes_py_file(self, attributes):
         header = ("# -*- coding: utf-8 -*-\n"
@@ -667,8 +694,7 @@ class picard_update_constants(Command):
             for key, value in sorted(attributes.items(), key=lambda i: i[0]):
                 write(line, key=key, value=value.replace("'", "\\'"))
             write(footer)
-            log.info("%s was rewritten (%d attributes)" % (filename,
-                                                           len(attributes)))
+            log.info("%s was rewritten (%d attributes)", filename, len(attributes))
 
 
 class picard_patch_version(Command):
@@ -690,7 +716,7 @@ class picard_patch_version(Command):
         regex = re.compile(r'^PICARD_BUILD_VERSION_STR\s*=.*$', re.MULTILINE)
         with open(filename, 'r+b') as f:
             source = (f.read()).decode()
-            build = self.platform + '.' + datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            build = self.platform + '.' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')
             patched_source = regex.sub('PICARD_BUILD_VERSION_STR = "%s"' % build, source).encode()
             f.seek(0)
             f.write(patched_source)
@@ -708,12 +734,13 @@ def cflags_to_include_dirs(cflags):
 
 def _picard_get_locale_files():
     locales = []
-    path_domain = {
-        'po': 'picard',
-        os.path.join('po', 'countries'): 'picard-countries',
-        os.path.join('po', 'attributes'): 'picard-attributes',
+    domain_path = {
+        'picard': 'po',
+        'picard-attributes': os.path.join('po', 'attributes'),
+        'picard-constants': os.path.join('po', 'constants'),
+        'picard-countries': os.path.join('po', 'countries'),
     }
-    for path, domain in path_domain.items():
+    for domain, path in domain_path.items():
         for filepath in glob.glob(os.path.join(path, '*.po')):
             filename = os.path.basename(filepath)
             locale = os.path.splitext(filename)[0]
@@ -774,16 +801,17 @@ args = {
         'clean_ui': picard_clean_ui,
         'build_appdata': picard_build_appdata,
         'regen_appdata_pot_file': picard_regen_appdata_pot_file,
+        'build_desktop_file': picard_build_desktop_file,
         'install': picard_install,
         'install_locales': picard_install_locales,
         'update_constants': picard_update_constants,
-        'pull_translations': picard_pull_translations,
         'regen_pot_file': picard_regen_pot_file,
+        'regen_constants_pot_file': picard_regen_constants_pot_file,
         'patch_version': picard_patch_version,
     },
     'scripts': ['scripts/' + PACKAGE_NAME],
     'install_requires': _get_requirements(),
-    'python_requires': '~=3.6',
+    'python_requires': '~=3.9',
     'classifiers': [
         'License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)',
         'Development Status :: 5 - Production/Stable',
@@ -792,10 +820,11 @@ args = {
         'Environment :: X11 Applications :: Qt',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3 :: Only',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
         'Operating System :: MacOS',
         'Operating System :: Microsoft :: Windows',
         'Operating System :: POSIX :: Linux',

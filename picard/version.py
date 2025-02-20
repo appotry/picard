@@ -3,7 +3,7 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2019-2021 Philipp Wolfer
-# Copyright (C) 2020-2021 Laurent Monin
+# Copyright (C) 2020-2021, 2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -29,7 +29,7 @@ class VersionError(Exception):
 
 
 class Version(namedtuple('VersionBase', 'major minor patch identifier revision')):
-    _version_re = re.compile(r"(\d+)(?:[._](\d+)(?:[._](\d+)[._]?(?:(dev|a|alpha|b|beta|rc|final)[._]?(\d+))?)?)?$")
+    _version_re = re.compile(r"^(\d+)(?:[._](\d+)(?:[._](\d+)[._]?(?:(dev|a|alpha|b|beta|rc|final)[._]?(\d+))?)?)?$")
 
     _identifiers = {
         'dev': 0,
@@ -56,9 +56,9 @@ class Version(namedtuple('VersionBase', 'major minor patch identifier revision')
 
     @classmethod
     def from_string(cls, version_str):
-        match = cls._version_re.search(version_str)
-        if match:
-            (major, minor, patch, identifier, revision) = match.groups()
+        match_ = cls._version_re.search(version_str)
+        if match_:
+            (major, minor, patch, identifier, revision) = match_.groups()
             major = int(major)
             if minor is None:
                 return Version(major)
@@ -77,17 +77,17 @@ class Version(namedtuple('VersionBase', 'major minor patch identifier revision')
     def valid_identifiers(cls):
         return set(cls._identifiers.keys())
 
-    def to_string(self, short=False):
-        if short and self.identifier in {'alpha', 'beta'}:
+    def short_str(self):
+        if self.identifier in {'alpha', 'beta'}:
             version = self._replace(identifier=self.identifier[0])
         else:
             version = self
-        if short and version.identifier == 'final':
+        if version.identifier == 'final':
             if version.patch == 0:
                 version_str = '%d.%d' % version[:2]
             else:
                 version_str = '%d.%d.%d' % version[:3]
-        elif short and version.identifier in {'a', 'b', 'rc'}:
+        elif version.identifier in {'a', 'b', 'rc'}:
             version_str = '%d.%d.%d%s%d' % version
         else:
             version_str = '%d.%d.%d.%s%d' % version
@@ -98,7 +98,7 @@ class Version(namedtuple('VersionBase', 'major minor patch identifier revision')
         return self[:3] + (self._identifiers.get(self.identifier, 0), self.revision)
 
     def __str__(self):
-        return self.to_string()
+        return '%d.%d.%d.%s%d' % self
 
     def __lt__(self, other):
         if not isinstance(other, Version):

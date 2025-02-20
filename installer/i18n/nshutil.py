@@ -4,6 +4,7 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2020-2021 Philipp Wolfer
+# Copyright (C) 2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -18,6 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+
 
 import re
 
@@ -135,11 +137,11 @@ def unescape_string(text):
 
 
 def parse_langstring(line):
-    match = RE_LANGSTRING_LINE.match(line)
-    if match:
+    match_ = RE_LANGSTRING_LINE.match(line)
+    if match_:
         return (
-            match.group('identifier'),
-            unescape_string(match.group('text'))
+            match_.group('identifier'),
+            unescape_string(match_.group('text'))
         )
     else:
         return None

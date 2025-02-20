@@ -2,8 +2,9 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019-2021 Philipp Wolfer
-# Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2019-2021, 2024 Philipp Wolfer
+# Copyright (C) 2020-2022 Laurent Monin
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -49,7 +50,7 @@ class CommonAsfTests:
     class AsfTestCase(CommonTests.TagFormatsTestCase):
 
         def test_supports_tag(self):
-            fmt = ext_to_format(self.testfile_ext[1:])
+            fmt = ext_to_format(self.testfile_ext)
             self.assertTrue(fmt.supports_tag('copyright'))
             self.assertTrue(fmt.supports_tag('compilation'))
             self.assertTrue(fmt.supports_tag('bpm'))
@@ -105,6 +106,7 @@ class ASFTest(CommonAsfTests.AsfTestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~bitrate': '128.0',
+        '~filesize': '3744',
     }
 
 
@@ -116,6 +118,7 @@ class WMATest(CommonAsfTests.AsfTestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~bitrate': '64.0',
+        '~filesize': '8164',
     }
     unexpected_info = ['~video']
 
@@ -129,6 +132,7 @@ class WMVTest(CommonAsfTests.AsfTestCase):
         '~sample_rate': '44100',
         '~bitrate': '128.0',
         '~video': '1',
+        '~filesize': '7373',
     }
 
 

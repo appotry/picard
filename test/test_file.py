@@ -2,8 +2,8 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2018-2021 Philipp Wolfer
-# Copyright (C) 2019-2021 Laurent Monin
+# Copyright (C) 2018-2025 Philipp Wolfer
+# Copyright (C) 2019-2022, 2024 Laurent Monin
 # Copyright (C) 2021 Bob Swift
 # Copyright (C) 2021 Sophist-UK
 #
@@ -38,9 +38,13 @@ from picard.const.sys import (
 )
 from picard.file import File
 from picard.metadata import Metadata
+from picard.util.tags import (
+    CALCULATED_TAGS,
+    FILE_INFO_TAGS,
+)
 
 
-class DataObjectTest(PicardTestCase):
+class FileTest(PicardTestCase):
 
     def setUp(self):
         super().setUp()
@@ -60,6 +64,10 @@ class DataObjectTest(PicardTestCase):
         self.assertEqual(42, self.file.tracknumber)
         self.file.metadata['tracknumber'] = 'FOURTYTWO'
         self.assertEqual(0, self.file.tracknumber)
+        self.file.metadata['tracknumber'] = '3/12'
+        self.assertEqual(3, self.file.tracknumber)
+        self.file.metadata['tracknumber'] = '3 / 12'
+        self.assertEqual(3, self.file.tracknumber)
 
     def test_discnumber(self):
         self.assertEqual(0, self.file.discnumber)
@@ -67,6 +75,10 @@ class DataObjectTest(PicardTestCase):
         self.assertEqual(42, self.file.discnumber)
         self.file.metadata['discnumber'] = 'FOURTYTWO'
         self.assertEqual(0, self.file.discnumber)
+        self.file.metadata["discnumber"] = '3/12'
+        self.assertEqual(3, self.file.discnumber)
+        self.file.metadata["discnumber"] = '3 / 12'
+        self.assertEqual(3, self.file.discnumber)
 
     def test_set_acoustid_fingerprint(self):
         fingerprint = 'foo'
@@ -168,7 +180,7 @@ class TestPreserveTimes(PicardTestCase):
         # access times may not be equal
         # time difference should be positive and reasonably low (if no access in between, it should be 0)
         delta = after_atime_ns - before_atime_ns
-        tolerance = 10**7  #  0.01 seconds
+        tolerance = 10**7  # 0.01 seconds
         self.assertTrue(0 <= delta < tolerance, "0 <= %s < %s" % (delta, tolerance))
 
         # ensure written data can be read back
@@ -210,6 +222,10 @@ class FileNamingTest(PicardTestCase):
             'move_files': False,
             'rename_files': False,
             'windows_compatibility': True,
+            'win_compat_replacements': {},
+            'windows_long_paths': False,
+            'replace_spaces_with_underscores': False,
+            'replace_dir_separator': '_',
             'file_renaming_scripts': {'test_id': {'script': '%album%/%title%'}},
             'selected_file_naming_script_id': 'test_id',
         })
@@ -220,18 +236,18 @@ class FileNamingTest(PicardTestCase):
 
     def test_make_filename_no_move_and_rename(self):
         filename = self.file.make_filename(self.file.filename, self.metadata)
-        self.assertEqual(os.path.realpath(self.file.filename), filename)
+        self.assertEqual(os.path.normpath(self.file.filename), filename)
 
     def test_make_filename_rename_only(self):
         config.setting['rename_files'] = True
         filename = self.file.make_filename(self.file.filename, self.metadata)
-        self.assertEqual(os.path.realpath('/somepath/sometitle.mp3'), filename)
+        self.assertEqual(os.path.normpath('/somepath/sometitle.mp3'), filename)
 
     def test_make_filename_move_only(self):
         config.setting['move_files'] = True
         filename = self.file.make_filename(self.file.filename, self.metadata)
         self.assertEqual(
-            os.path.realpath('/media/music/somealbum/somefile.mp3'),
+            os.path.normpath('/media/music/somealbum/somefile.mp3'),
             filename)
 
     def test_make_filename_move_and_rename(self):
@@ -239,7 +255,7 @@ class FileNamingTest(PicardTestCase):
         config.setting['move_files'] = True
         filename = self.file.make_filename(self.file.filename, self.metadata)
         self.assertEqual(
-            os.path.realpath('/media/music/somealbum/sometitle.mp3'),
+            os.path.normpath('/media/music/somealbum/sometitle.mp3'),
             filename)
 
     def test_make_filename_move_relative_path(self):
@@ -247,32 +263,39 @@ class FileNamingTest(PicardTestCase):
         config.setting['move_files_to'] = 'subdir'
         filename = self.file.make_filename(self.file.filename, self.metadata)
         self.assertEqual(
-            os.path.realpath('/somepath/subdir/somealbum/somefile.mp3'),
+            os.path.normpath('/somepath/subdir/somealbum/somefile.mp3'),
             filename)
 
     def test_make_filename_empty_script(self):
         config.setting['rename_files'] = True
         config.setting['file_renaming_scripts'] = {'test_id': {'script': '$noop()'}}
         filename = self.file.make_filename(self.file.filename, self.metadata)
-        self.assertEqual(os.path.realpath('/somepath/somefile.mp3'), filename)
+        self.assertEqual(os.path.normpath('/somepath/somefile.mp3'), filename)
+
+    def test_make_filename_empty_basename(self):
+        config.setting['move_files'] = True
+        config.setting['rename_files'] = True
+        config.setting['file_renaming_scripts'] = {'test_id': {'script': '/somedir/$noop()'}}
+        filename = self.file.make_filename(self.file.filename, self.metadata)
+        self.assertEqual(os.path.normpath('/media/music/somedir/somefile.mp3'), filename)
 
     def test_make_filename_no_extension(self):
         config.setting['rename_files'] = True
         file_ = FakeMp3File('/somepath/_')
         filename = file_.make_filename(file_.filename, self.metadata)
-        self.assertEqual(os.path.realpath('/somepath/sometitle.mp3'), filename)
+        self.assertEqual(os.path.normpath('/somepath/sometitle.mp3'), filename)
 
     def test_make_filename_lowercase_extension(self):
         config.setting['rename_files'] = True
         file_ = FakeMp3File('/somepath/somefile.MP3')
         filename = file_.make_filename(file_.filename, self.metadata)
-        self.assertEqual(os.path.realpath('/somepath/sometitle.mp3'), filename)
+        self.assertEqual(os.path.normpath('/somepath/sometitle.mp3'), filename)
 
     def test_make_filename_scripted_extension(self):
         config.setting['rename_files'] = True
         config.setting['file_renaming_scripts'] = {'test_id': {'script': '$set(_extension,.foo)%title%'}}
         filename = self.file.make_filename(self.file.filename, self.metadata)
-        self.assertEqual(os.path.realpath('/somepath/sometitle.foo'), filename)
+        self.assertEqual(os.path.normpath('/somepath/sometitle.foo'), filename)
 
     def test_make_filename_replace_trailing_dots(self):
         config.setting['rename_files'] = True
@@ -284,7 +307,7 @@ class FileNamingTest(PicardTestCase):
         })
         filename = self.file.make_filename(self.file.filename, metadata)
         self.assertEqual(
-            os.path.realpath('/media/music/somealbum_/sometitle.mp3'),
+            os.path.normpath('/media/music/somealbum_/sometitle.mp3'),
             filename)
 
     @unittest.skipUnless(not IS_WIN, "non-windows test")
@@ -298,7 +321,7 @@ class FileNamingTest(PicardTestCase):
         })
         filename = self.file.make_filename(self.file.filename, metadata)
         self.assertEqual(
-            os.path.realpath('/media/music/somealbum./sometitle.mp3'),
+            os.path.normpath('/media/music/somealbum./sometitle.mp3'),
             filename)
 
     def test_make_filename_replace_leading_dots(self):
@@ -311,7 +334,7 @@ class FileNamingTest(PicardTestCase):
         })
         filename = self.file.make_filename(self.file.filename, metadata)
         self.assertEqual(
-            os.path.realpath('/media/music/_somealbum/_sometitle.mp3'),
+            os.path.normpath('/media/music/_somealbum/_sometitle.mp3'),
             filename)
 
 
@@ -458,7 +481,7 @@ class FileUpdateTest(PicardTestCase):
         self.file.state = File.NORMAL
 
         self.file.update(signal=False)
-        self.assertEqual(self.file.similarity, self.INVALIDSIMVAL)  # it shouldbn't be modified
+        self.assertEqual(self.file.similarity, 1.0)
         self.assertEqual(self.file.state, File.CHANGED)
 
     def test_signal(self):
@@ -593,3 +616,116 @@ class FileUpdateTest(PicardTestCase):
         self.file.update(signal=False)
         self.assertEqual(self.file.similarity, 1.0)
         self.assertEqual(self.file.state, File.NORMAL)
+
+    def test_copy_file_info_tags(self):
+        info_tags = {}
+        for info in FILE_INFO_TAGS:
+            info_tags[info] = 'val' + info
+
+        orig_metadata = Metadata(info_tags)
+        orig_metadata['a'] = 'vala'
+        metadata = Metadata({
+            '~bitrate': 'xxx',
+            'b': 'valb',
+        })
+        self.file._copy_file_info_tags(metadata, orig_metadata)
+        for info in FILE_INFO_TAGS:
+            self.assertEqual('val' + info, metadata[info])
+        self.assertEqual('valb', metadata['b'])
+        self.assertNotIn('a', metadata)
+
+
+class FileCopyMetadataTest(PicardTestCase):
+
+    def setUp(self):
+        super().setUp()
+        metadata = Metadata({
+            'album': 'somealbum',
+            'artist': 'someartist',
+            'title': 'sometitle',
+        })
+        del metadata['deletedtag']
+        metadata.images.append(create_image(b'a'))
+        self.file = File('/somepath/somefile.mp3')
+        self.file.metadata = metadata
+        self.file.orig_metadata = Metadata({
+            'album': 'origalbum',
+            'artist': 'origartist',
+            'title': 'origtitle',
+        })
+        self.INVALIDSIMVAL = 666
+        self.set_config_values({
+            'preserved_tags': [],
+        })
+
+    def test_copy_metadata_full(self):
+        new_metadata = Metadata({
+            'title': 'othertitle',
+            '~foo': 'bar',
+        })
+        del new_metadata['foo']
+        new_metadata.images.append(create_image(b'b'))
+        self.file.copy_metadata(new_metadata, preserve_deleted=False)
+        self.assertEqual(self.file.metadata, new_metadata)
+        self.assertEqual(self.file.metadata.images, new_metadata.images)
+        self.assertEqual(self.file.metadata.deleted_tags, new_metadata.deleted_tags)
+
+    def test_copy_metadata_must_preserve_deleted_tags_by_default(self):
+        new_metadata = Metadata({
+            'title': 'othertitle',
+            '~foo': 'bar',
+        })
+        del new_metadata['foo']
+        self.file.copy_metadata(new_metadata)
+        self.assertEqual(self.file.metadata, new_metadata)
+        self.assertEqual(self.file.metadata.deleted_tags, {'deletedtag', 'foo'})
+
+    def test_copy_metadata_do_not_preserve_deleted_tags(self):
+        new_metadata = Metadata({
+            'title': 'othertitle',
+            '~foo': 'bar',
+        })
+        del new_metadata['foo']
+        self.file.copy_metadata(new_metadata, preserve_deleted=False)
+        self.assertEqual(self.file.metadata, new_metadata)
+        self.assertEqual(self.file.metadata.deleted_tags, {'foo'})
+
+    def test_copy_metadata_must_keep_file_content_specific_tags(self):
+        for tag in CALCULATED_TAGS:
+            self.file.metadata[tag] = 'foo'
+        new_metadata = Metadata()
+        self.file.copy_metadata(new_metadata)
+        for tag in CALCULATED_TAGS:
+            self.assertEqual(
+                self.file.metadata[tag], 'foo',
+                f'Tag {tag}: {self.file.metadata[tag]!r} != "foo"')
+
+    def test_copy_metadata_must_remove_deleted_acoustid_id(self):
+        self.file.metadata['acoustid_id'] = 'foo'
+        new_metadata = Metadata()
+        new_metadata.delete('acoustid_id')
+        self.file.copy_metadata(new_metadata)
+        self.assertEqual(self.file.metadata['acoustid_id'], '')
+        self.assertIn('acoustid_id', self.file.metadata.deleted_tags)
+
+    def test_copy_metadata_with_preserved_tags(self):
+        self.set_config_values({
+            'preserved_tags': ['artist', 'title'],
+        })
+        new_metadata = Metadata({
+            'album': 'otheralbum',
+            'artist': 'otherartist',
+            'title': 'othertitle',
+        })
+        self.file.copy_metadata(new_metadata)
+        self.assertEqual(self.file.metadata['album'], 'otheralbum')
+        self.assertEqual(self.file.metadata['artist'], 'origartist')
+        self.assertEqual(self.file.metadata['title'], 'origtitle')
+
+    def test_copy_metadata_must_always_preserve_technical_variables(self):
+        self.file.orig_metadata['~filename'] = 'orig.flac'
+        new_metadata = Metadata({
+            '~filename': 'new.flac',
+        })
+        self.file.copy_metadata(new_metadata)
+        self.assertEqual(self.file.metadata['~filename'], 'orig.flac')

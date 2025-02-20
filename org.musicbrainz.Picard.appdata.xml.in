@@ -50,6 +50,10 @@
         tags will look like.
       </li>
       <li>
+        Cover Art: Picard can find and download the correct cover art for
+        your albums.
+      </li>
+      <li>
         Open Source: Picard is licensed under the GNU General Public License 2.0
         or later, and is hosted on GitHub where it is actively
         developed by some awesome developers.
@@ -68,6 +72,13 @@
   <provides>
     <binary>picard</binary>
   </provides>
+
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <display_length compare="ge">768</display_length>
+    <internet>always</internet>
+  </recommends>
 
   <screenshots>
     <screenshot type="default">
@@ -92,7 +103,7 @@
   <url type="faq">https://picard-docs.musicbrainz.org/en/faq/faq.html</url>
   <url type="help">https://picard-docs.musicbrainz.org/</url>
   <url type="donation">https://metabrainz.org/donate</url>
-  <url type="translate">https://www.transifex.com/musicbrainz/musicbrainz/picard/</url>
+  <url type="translate">https://translations.metabrainz.org/projects/picard/</url>
 
   <translation type="gettext">picard</translation>
   <developer_name>MetaBrainz Foundation</developer_name>

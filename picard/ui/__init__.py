@@ -4,10 +4,10 @@
 #
 # Copyright (C) 2006-2008 Lukáš Lalinský
 # Copyright (C) 2014 Sophist-UK
-# Copyright (C) 2014, 2018, 2020-2021 Laurent Monin
+# Copyright (C) 2014, 2018, 2020-2024 Laurent Monin
 # Copyright (C) 2016-2018 Sambhav Kothari
 # Copyright (C) 2018 Vishal Choudhary
-# Copyright (C) 2019-2021 Philipp Wolfer
+# Copyright (C) 2019-2023 Philipp Wolfer
 # Copyright (C) 2021 Bob Swift
 #
 # This program is free software; you can redistribute it and/or
@@ -27,7 +27,7 @@
 
 import uuid
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtWidgets,
@@ -40,6 +40,7 @@ from picard.config import (
 )
 from picard.const import DOCS_BASE_URL
 from picard.const.sys import (
+    IS_HAIKU,
     IS_MACOS,
     IS_WIN,
 )
@@ -53,6 +54,8 @@ if IS_MACOS:
     FONT_FAMILY_MONOSPACE = 'Menlo'
 elif IS_WIN:
     FONT_FAMILY_MONOSPACE = 'Consolas'
+elif IS_HAIKU:
+    FONT_FAMILY_MONOSPACE = 'Noto Sans Mono'
 else:
     FONT_FAMILY_MONOSPACE = 'Monospace'
 
@@ -61,9 +64,9 @@ class PreserveGeometry:
 
     defaultsize = None
 
-    def __init__(self):
-        Option.add_if_missing("persist", self.opt_name(), QtCore.QByteArray())
-        Option.add_if_missing("persist", self.splitters_name(), {})
+    def __init__(self, *args, **kwargs):
+        Option.add_if_missing('persist', self.opt_name(), QtCore.QByteArray())
+        Option.add_if_missing('persist', self.splitters_name(), {})
         if getattr(self, 'finished', None):
             self.finished.connect(self.save_geometry)
 
@@ -98,7 +101,7 @@ class PreserveGeometry:
         name = widget.objectName()
         if not name:
             name = '.'.join(self._get_lineage(widget))
-            log.debug("Splitter does not have objectName(): %s" % name)
+            log.debug("Splitter does not have objectName(): %s", name)
         return name
 
     @property
@@ -145,7 +148,7 @@ class SingletonDialog:
     def get_instance(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = cls(*args, **kwargs)
-            cls._instance.finished.connect(cls._on_dialog_finished)
+            cls._instance.destroyed.connect(cls._on_dialog_destroyed)
         return cls._instance
 
     @classmethod
@@ -168,25 +171,26 @@ class SingletonDialog:
         return instance
 
     @classmethod
-    def _on_dialog_finished(cls):
+    def _on_dialog_destroyed(cls):
         cls._instance = None
 
 
 class PicardDialog(QtWidgets.QDialog, PreserveGeometry):
 
     help_url = None
-    flags = QtCore.Qt.WindowSystemMenuHint | QtCore.Qt.WindowTitleHint | QtCore.Qt.WindowCloseButtonHint
+    flags = QtCore.Qt.WindowType.WindowSystemMenuHint | QtCore.Qt.WindowType.WindowTitleHint | QtCore.Qt.WindowType.WindowCloseButtonHint
     ready_for_display = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__(parent, self.flags)
+        super().__init__(parent=parent, f=self.flags)
+        self.tagger = QtCore.QCoreApplication.instance()
         self.__shown = False
         self.ready_for_display.connect(self.restore_geometry)
 
     def keyPressEvent(self, event):
-        if event.matches(QtGui.QKeySequence.Close):
+        if event.matches(QtGui.QKeySequence.StandardKey.Close):
             self.close()
-        elif event.matches(QtGui.QKeySequence.HelpContents) and self.help_url:
+        elif event.matches(QtGui.QKeySequence.StandardKey.HelpContents) and self.help_url:
             self.show_help()
         else:
             super().keyPressEvent(event)
@@ -208,27 +212,22 @@ class PicardDialog(QtWidgets.QDialog, PreserveGeometry):
 # With py3, QObjects are no longer hashable unless they have
 # an explicit __hash__ implemented.
 # See: http://python.6.x6.nabble.com/QTreeWidgetItem-is-not-hashable-in-Py3-td5212216.html
-class HashableTreeWidgetItem(QtWidgets.QTreeWidgetItem):
-
+class HashableItem:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.id = uuid.uuid4()
+        self.__id = uuid.uuid4()
+        self.__hash = hash(self.__id)
 
     def __eq__(self, other):
-        return self.id == other.id
+        return self.__id == other.__id
 
     def __hash__(self):
-        return hash(str(self.id))
+        return self.__hash
 
 
-class HashableListWidgetItem(QtWidgets.QListWidgetItem):
+class HashableTreeWidgetItem(HashableItem, QtWidgets.QTreeWidgetItem):
+    pass
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.id = uuid.uuid4()
 
-    def __eq__(self, other):
-        return self.id == other.id
-
-    def __hash__(self):
-        return hash(str(self.id))
+class HashableListWidgetItem(HashableItem, QtWidgets.QListWidgetItem):
+    pass

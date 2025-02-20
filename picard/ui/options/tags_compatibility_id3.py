@@ -3,8 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2006 Lukáš Lalinský
-# Copyright (C) 2019-2021 Philipp Wolfer
-# Copyright (C) 2021 Laurent Monin
+# Copyright (C) 2019-2021, 2023, 2025 Philipp Wolfer
+# Copyright (C) 2021, 2023-2024 Laurent Monin
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -23,40 +23,35 @@
 
 from functools import partial
 
-from picard.config import (
-    BoolOption,
-    TextOption,
-    get_config,
-)
+from picard.config import get_config
+from picard.extension_points.options_pages import register_options_page
+from picard.i18n import N_
 
-from picard.ui.options import (
-    OptionsPage,
-    register_options_page,
-)
-from picard.ui.ui_options_tags_compatibility_id3 import (
+from picard.ui.forms.ui_options_tags_compatibility_id3 import (
     Ui_TagsCompatibilityOptionsPage,
 )
+from picard.ui.options import OptionsPage
 
 
 class TagsCompatibilityID3OptionsPage(OptionsPage):
 
-    NAME = "tags_compatibility_id3"
+    NAME = 'tags_compatibility_id3'
     TITLE = N_("ID3")
-    PARENT = "tags"
+    PARENT = 'tags'
     SORT_ORDER = 30
     ACTIVE = True
-    HELP_URL = '/config/options_tags_compatibility_id3.html'
+    HELP_URL = "/config/options_tags_compatibility_id3.html"
 
-    options = [
-        BoolOption("setting", "write_id3v1", True),
-        BoolOption("setting", "write_id3v23", True),
-        TextOption("setting", "id3v2_encoding", "utf-16"),
-        TextOption("setting", "id3v23_join_with", "/"),
-        BoolOption("setting", "itunes_compatible_grouping", False),
-    ]
+    OPTIONS = (
+        ('write_id3v23', ['write_id3v23', 'write_id3v24']),
+        ('id3v2_encoding', ['enc_utf8', 'enc_utf16', 'enc_iso88591']),
+        ('id3v23_join_with', ['id3v23_join_with']),
+        ('itunes_compatible_grouping', ['itunes_compatible_grouping']),
+        ('write_id3v1', ['write_id3v1']),
+    )
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = Ui_TagsCompatibilityOptionsPage()
         self.ui.setupUi(self)
         self.ui.write_id3v23.clicked.connect(self.update_encodings)
@@ -64,33 +59,33 @@ class TagsCompatibilityID3OptionsPage(OptionsPage):
 
     def load(self):
         config = get_config()
-        self.ui.write_id3v1.setChecked(config.setting["write_id3v1"])
-        if config.setting["write_id3v23"]:
+        self.ui.write_id3v1.setChecked(config.setting['write_id3v1'])
+        if config.setting['write_id3v23']:
             self.ui.write_id3v23.setChecked(True)
         else:
             self.ui.write_id3v24.setChecked(True)
-        if config.setting["id3v2_encoding"] == "iso-8859-1":
+        if config.setting['id3v2_encoding'] == 'iso-8859-1':
             self.ui.enc_iso88591.setChecked(True)
-        elif config.setting["id3v2_encoding"] == "utf-16":
+        elif config.setting['id3v2_encoding'] == 'utf-16':
             self.ui.enc_utf16.setChecked(True)
         else:
             self.ui.enc_utf8.setChecked(True)
-        self.ui.id3v23_join_with.setEditText(config.setting["id3v23_join_with"])
-        self.ui.itunes_compatible_grouping.setChecked(config.setting["itunes_compatible_grouping"])
+        self.ui.id3v23_join_with.setEditText(config.setting['id3v23_join_with'])
+        self.ui.itunes_compatible_grouping.setChecked(config.setting['itunes_compatible_grouping'])
         self.update_encodings()
 
     def save(self):
         config = get_config()
-        config.setting["write_id3v1"] = self.ui.write_id3v1.isChecked()
-        config.setting["write_id3v23"] = self.ui.write_id3v23.isChecked()
-        config.setting["id3v23_join_with"] = self.ui.id3v23_join_with.currentText()
+        config.setting['write_id3v1'] = self.ui.write_id3v1.isChecked()
+        config.setting['write_id3v23'] = self.ui.write_id3v23.isChecked()
+        config.setting['id3v23_join_with'] = self.ui.id3v23_join_with.currentText()
         if self.ui.enc_iso88591.isChecked():
-            config.setting["id3v2_encoding"] = "iso-8859-1"
+            config.setting['id3v2_encoding'] = 'iso-8859-1'
         elif self.ui.enc_utf16.isChecked():
-            config.setting["id3v2_encoding"] = "utf-16"
+            config.setting['id3v2_encoding'] = 'utf-16'
         else:
-            config.setting["id3v2_encoding"] = "utf-8"
-        config.setting["itunes_compatible_grouping"] = self.ui.itunes_compatible_grouping.isChecked()
+            config.setting['id3v2_encoding'] = 'utf-8'
+        config.setting['itunes_compatible_grouping'] = self.ui.itunes_compatible_grouping.isChecked()
 
     def update_encodings(self, force_utf8=False):
         if self.ui.write_id3v23.isChecked():

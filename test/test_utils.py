@@ -4,16 +4,18 @@
 #
 # Copyright (C) 2006-2007 Lukáš Lalinský
 # Copyright (C) 2010 fatih
-# Copyright (C) 2010-2011, 2014, 2018-2021 Philipp Wolfer
+# Copyright (C) 2010-2011, 2014, 2018-2024 Philipp Wolfer
 # Copyright (C) 2012, 2014, 2018 Wieland Hoffmann
 # Copyright (C) 2013 Ionuț Ciocîrlan
-# Copyright (C) 2013-2014, 2018-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2018-2024 Laurent Monin
 # Copyright (C) 2014, 2017 Sophist-UK
 # Copyright (C) 2016 Frederik “Freso” S. Olesen
 # Copyright (C) 2017 Sambhav Kothari
 # Copyright (C) 2017 Shen-Ta Hsieh
 # Copyright (C) 2021 Bob Swift
 # Copyright (C) 2021 Vladislav Karbovskii
+# Copyright (C) 2024 Arnab Chakraborty
+# Copyright (C) 2024 ShubhamBhut
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -30,70 +32,119 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-import builtins
 from collections import namedtuple
 from collections.abc import Iterator
+import os
 import re
 import subprocess  # nosec: B404
 from tempfile import NamedTemporaryFile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import (
+    Mock,
+    patch,
+)
 
-from test.picardtestcase import PicardTestCase
+from test.picardtestcase import (
+    PicardTestCase,
+    get_test_data_path,
+)
 
 from picard import util
+from picard.const import MUSICBRAINZ_SERVERS
 from picard.const.sys import (
     IS_MACOS,
     IS_WIN,
 )
+from picard.i18n import gettext as _
 from picard.util import (
+    IgnoreUpdatesContext,
     album_artist_from_path,
+    any_exception_isinstance,
+    build_qurl,
+    detect as charset_detect,
+    detect_file_encoding,
+    encoded_queryargs,
     extract_year_from_date,
     find_best_match,
     is_absolute_path,
+    iter_exception_chain,
     iter_files_from_objects,
     iter_unique,
     limited_join,
     make_filename_from_title,
+    normpath,
     pattern_as_regex,
     sort_by_similarity,
+    system_supports_long_paths,
+    titlecase,
     tracknum_and_title_from_filename,
     tracknum_from_filename,
     uniqify,
     wildcards_to_regex_pattern,
+    win_prefix_longpath,
 )
-
-
-# ensure _() is defined
-if '_' not in builtins.__dict__:
-    builtins.__dict__['_'] = lambda a: a
 
 
 class ReplaceWin32IncompatTest(PicardTestCase):
 
     @unittest.skipUnless(IS_WIN, "windows test")
     def test_correct_absolute_win32(self):
-        self.assertEqual(util.replace_win32_incompat("c:\\test\\te\"st/2"),
-                             "c:\\test\\te_st/2")
-        self.assertEqual(util.replace_win32_incompat("c:\\test\\d:/2"),
-                             "c:\\test\\d_/2")
+        self.assertEqual(util.replace_win32_incompat('c:\\test\\te"st/2'),
+                             'c:\\test\\te_st/2')
+        self.assertEqual(util.replace_win32_incompat('c:\\test\\d:/2'),
+                             'c:\\test\\d_/2')
 
-    @unittest.skipUnless(not IS_WIN, "non-windows test")
+    @unittest.skipUnless(not IS_WIN, 'non-windows test')
     def test_correct_absolute_non_win32(self):
-        self.assertEqual(util.replace_win32_incompat("/test/te\"st/2"),
-                             "/test/te_st/2")
-        self.assertEqual(util.replace_win32_incompat("/test/d:/2"),
-                             "/test/d_/2")
+        self.assertEqual(util.replace_win32_incompat('/test/te"st/2'),
+                             '/test/te_st/2')
+        self.assertEqual(util.replace_win32_incompat('/test/d:/2'),
+                             '/test/d_/2')
 
     def test_correct_relative(self):
-        self.assertEqual(util.replace_win32_incompat("A\"*:<>?|b"),
-                             "A_______b")
-        self.assertEqual(util.replace_win32_incompat("d:tes<t"),
-                             "d_tes_t")
+        self.assertEqual(util.replace_win32_incompat('A"*:<>?|b'),
+                             'A_______b')
+        self.assertEqual(util.replace_win32_incompat('d:tes<t'),
+                             'd_tes_t')
 
     def test_incorrect(self):
-        self.assertNotEqual(util.replace_win32_incompat("c:\\test\\te\"st2"),
-                             "c:\\test\\te\"st2")
+        self.assertNotEqual(util.replace_win32_incompat('c:\\test\\te"st2'),
+                             'c:\\test\\te"st2')
+
+    def test_custom_replacement_char(self):
+        self.assertEqual(util.replace_win32_incompat('A"*:<>?|b', repl='+'),
+                             "A+++++++b")
+
+    def test_custom_replacement_map(self):
+        input = 'foo*:<>?|"'
+        replacments = {
+            '*': 'A',
+            ':': 'B',
+            '<': 'C',
+            '>': 'D',
+            '?': 'E',
+            '|': 'F',
+            '"': 'G',
+        }
+        replaced = util.replace_win32_incompat(input, replacements=replacments)
+        self.assertEqual('fooABCDEFG', replaced)
+
+    def test_partial_replacement_map(self):
+        input = 'foo*:<>?|"'
+        replacments = {
+            '*': 'A',
+            '<': 'C',
+        }
+        replaced = util.replace_win32_incompat(input, repl='-', replacements=replacments)
+        self.assertEqual('fooA-C----', replaced)
+
+    def test_empty_string_replacement_map(self):
+        input = 'foo:bar'
+        replacments = {
+            ':': '',
+        }
+        replaced = util.replace_win32_incompat(input, replacements=replacments)
+        self.assertEqual('foobar', replaced)
 
 
 class MakeFilenameTest(PicardTestCase):
@@ -123,6 +174,7 @@ class ExtractYearTest(PicardTestCase):
         self.assertEqual(extract_year_from_date('2020-02-28'), 2020)
         self.assertEqual(extract_year_from_date('2015.02'), 2015)
         self.assertEqual(extract_year_from_date('2015; 2015'), None)
+        self.assertEqual(extract_year_from_date('20190303201903032019030320190303'), None)
         # test for the format as supported by ID3 (https://id3.org/id3v2.4.0-structure): yyyy-MM-ddTHH:mm:ss
         self.assertEqual(extract_year_from_date('2020-07-21T13:00:00'), 2020)
 
@@ -137,15 +189,26 @@ class ExtractYearTest(PicardTestCase):
 class SanitizeDateTest(PicardTestCase):
 
     def test_correct(self):
+        self.assertEqual(util.sanitize_date(""), "")
+        self.assertEqual(util.sanitize_date("0"), "")
+        self.assertEqual(util.sanitize_date("0000"), "")
+        self.assertEqual(util.sanitize_date("2006"), "2006")
         self.assertEqual(util.sanitize_date("2006--"), "2006")
-        self.assertEqual(util.sanitize_date("2006--02"), "2006")
+        self.assertEqual(util.sanitize_date("2006-00-02"), "2006-00-02")
         self.assertEqual(util.sanitize_date("2006   "), "2006")
         self.assertEqual(util.sanitize_date("2006 02"), "")
         self.assertEqual(util.sanitize_date("2006.02"), "")
         self.assertEqual(util.sanitize_date("2006-02"), "2006-02")
+        self.assertEqual(util.sanitize_date("2006-02-00"), "2006-02")
+        self.assertEqual(util.sanitize_date("2006-00-00"), "2006")
+        self.assertEqual(util.sanitize_date("2006-02-23"), "2006-02-23")
+        self.assertEqual(util.sanitize_date("2006-00-23"), "2006-00-23")
+        self.assertEqual(util.sanitize_date("0000-00-23"), "0000-00-23")
+        self.assertEqual(util.sanitize_date("0000-02"), "0000-02")
+        self.assertEqual(util.sanitize_date("--23"), "0000-00-23")
 
     def test_incorrect(self):
-        self.assertNotEqual(util.sanitize_date("2006--02"), "2006-02")
+        self.assertNotEqual(util.sanitize_date("2006--02"), "2006")
         self.assertNotEqual(util.sanitize_date("2006.03.02"), "2006-03-02")
 
 
@@ -339,6 +402,7 @@ class AlbumArtistFromPathTest(PicardTestCase):
 
 class IsAbsolutePathTest(PicardTestCase):
 
+    @unittest.skipIf(IS_WIN, "POSIX test")
     def test_is_absolute(self):
         self.assertTrue(is_absolute_path('/foo/bar'))
         self.assertFalse(is_absolute_path('foo/bar'))
@@ -349,7 +413,11 @@ class IsAbsolutePathTest(PicardTestCase):
     def test_is_absolute_windows(self):
         self.assertTrue(is_absolute_path('D:/foo/bar'))
         self.assertTrue(is_absolute_path('D:\\foo\\bar'))
-        self.assertTrue(is_absolute_path('\\foo\\bar'))
+        self.assertFalse(is_absolute_path('\\foo\\bar'))
+        self.assertFalse(is_absolute_path('/foo/bar'))
+        self.assertFalse(is_absolute_path('foo/bar'))
+        self.assertFalse(is_absolute_path('./foo/bar'))
+        self.assertFalse(is_absolute_path('../foo/bar'))
         # Paths to Windows shares
         self.assertTrue(is_absolute_path('\\\\foo\\bar'))
         self.assertTrue(is_absolute_path('\\\\foo\\bar\\'))
@@ -405,16 +473,13 @@ class SortBySimilarity(PicardTestCase):
             SimMatchTest(similarity=0.75, name='c'),
         ]
 
-    def candidates(self):
-        yield from self.test_values
-
     def test_sort_by_similarity(self):
-        results = [result.name for result in sort_by_similarity(self.candidates)]
+        results = [result.name for result in sort_by_similarity(self.test_values)]
         self.assertEqual(results, ['b', 'c', 'd', 'a'])
 
     def test_findbestmatch(self):
         no_match = SimMatchTest(similarity=-1, name='no_match')
-        best_match = find_best_match(self.candidates, no_match)
+        best_match = find_best_match(self.test_values, no_match)
 
         self.assertEqual(best_match.result.name, 'b')
         self.assertEqual(best_match.similarity, 0.75)
@@ -423,20 +488,10 @@ class SortBySimilarity(PicardTestCase):
         self.test_values = []
 
         no_match = SimMatchTest(similarity=-1, name='no_match')
-        best_match = find_best_match(self.candidates, no_match)
+        best_match = find_best_match(self.test_values, no_match)
 
         self.assertEqual(best_match.result.name, 'no_match')
         self.assertEqual(best_match.similarity, -1)
-
-
-class GetQtEnum(PicardTestCase):
-
-    def test_get_qt_enum(self):
-        from PyQt5.QtCore import QStandardPaths
-        values = util.get_qt_enum(QStandardPaths, QStandardPaths.LocateOption)
-        self.assertIn('LocateFile', values)
-        self.assertIn('LocateDirectory', values)
-        self.assertNotIn('DesktopLocation', values)
 
 
 class LimitedJoin(PicardTestCase):
@@ -515,6 +570,9 @@ class TracknumFromFilenameTest(PicardTestCase):
             (242, 'track-242.mp3'),
             (242, 'track nr 242.mp3'),
             (242, 'track_242.mp3'),
+            (3, 'track003.mp3'),
+            (40, 'Track40.mp3'),
+            (None, 'UB40.mp3'),
             (1, 'artist song 2004 track01 xxxx.ogg'),
             (1, 'artist song 2004 track-no-01 xxxx.ogg'),
             (1, 'artist song 2004 track-no_01 xxxx.ogg'),
@@ -568,11 +626,17 @@ class TracknumAndTitleFromFilenameTest(PicardTestCase):
         tests = (
             ((None, 'Foo'), 'Foo.mp3'),
             (('1', 'Track 0001'), 'Track 0001.mp3'),
+            (('42', 'Track-42'), 'Track-42.mp3'),
             (('99', 'Foo'), '99 Foo.mp3'),
             (('42', 'Foo'), '0000042 Foo.mp3'),
             (('2', 'Foo'), '0000002 Foo.mp3'),
             ((None, '20000 Feet'), '20000 Feet.mp3'),
             ((None, '20,000 Feet'), '20,000 Feet.mp3'),
+            ((None, 'Venus (Original 12" version)'), 'Venus (Original 12" version).mp3'),
+            ((None, 'Vanity 6'), 'Vanity 6.mp3'),
+            ((None, 'UB40 - Red Red Wine'), 'UB40 - Red Red Wine.mp3'),
+            ((None, 'Red Red Wine - UB40'), 'Red Red Wine - UB40.mp3'),
+            ((None, 'Symphony no. 5 in D minor'), 'Symphony no. 5 in D minor.mp3'),
         )
         for expected, filename in tests:
             result = tracknum_and_title_from_filename(filename)
@@ -671,3 +735,344 @@ class WildcardsToRegexPatternTest(PicardTestCase):
         regex = wildcards_to_regex_pattern(pattern)
         self.assertEqual(re.escape(pattern), regex)
         re.compile(regex)
+
+
+class BuildQUrlTest(PicardTestCase):
+
+    def test_path_and_querystring(self):
+        query = {'foo': 'x', 'bar': 'y'}
+        self.assertEqual('http://example.com/', build_qurl('example.com', path='/').toDisplayString())
+        self.assertEqual('http://example.com/foo/bar', build_qurl('example.com', path='/foo/bar').toDisplayString())
+        self.assertEqual('http://example.com/foo/bar?foo=x&bar=y', build_qurl('example.com', path='/foo/bar', queryargs=query).toDisplayString())
+        self.assertEqual('http://example.com?foo=x&bar=y', build_qurl('example.com', queryargs=query).toDisplayString())
+
+    def test_standard_ports(self):
+        self.assertEqual('http://example.com', build_qurl('example.com').toDisplayString())
+        self.assertEqual('http://example.com', build_qurl('example.com', port=80).toDisplayString())
+        self.assertEqual('https://example.com', build_qurl('example.com', port=443).toDisplayString())
+
+    def test_custom_port(self):
+        self.assertEqual('http://example.com:8080', build_qurl('example.com', port=8080).toDisplayString())
+        self.assertEqual('http://example.com:8080/', build_qurl('example.com', port=8080, path="/").toDisplayString())
+        self.assertEqual('http://example.com:8080?foo=x', build_qurl('example.com', port=8080, queryargs={'foo': 'x'}).toDisplayString())
+
+    def test_mb_server(self):
+        for host in MUSICBRAINZ_SERVERS:
+            expected = 'https://' + host
+            self.assertEqual(expected, build_qurl(host, port=80).toDisplayString())
+            self.assertEqual(expected, build_qurl(host, port=443).toDisplayString())
+            self.assertEqual(expected, build_qurl(host, port=8080).toDisplayString())
+
+    def test_encoded_queryargs(self):
+        query = encoded_queryargs({'foo': ' %20&;', 'bar': '=%+?abc'})
+        self.assertEqual('%20%2520%26%3B', query['foo'])
+        self.assertEqual('%3D%25%2B%3Fabc', query['bar'])
+        # spaces are decoded in displayed string
+        expected = 'http://example.com?foo= %2520%26%3B&bar=%3D%25%2B%3Fabc'
+        result = build_qurl('example.com', queryargs=query).toDisplayString()
+        self.assertEqual(expected, result)
+
+
+class NormpathTest(PicardTestCase):
+
+    @unittest.skipIf(IS_WIN, "non-windows test")
+    def test_normpath(self):
+        self.assertEqual('/foo/bar', normpath('/foo//bar'))
+        self.assertEqual('/bar', normpath('/foo/../bar'))
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    def test_normpath_windows(self):
+        self.assertEqual(r'C:\Foo\Bar.baz', normpath('C:/Foo/Bar.baz'))
+        self.assertEqual(r'C:\Bar.baz', normpath('C:/Foo/../Bar.baz'))
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    @patch.object(util, 'system_supports_long_paths')
+    def test_normpath_windows_longpath(self, mock_system_supports_long_paths):
+        mock_system_supports_long_paths.return_value = False
+        path = rf'C:\foo\{252 * "a"}'
+        self.assertEqual(path, normpath(path))
+        path += 'a'
+        self.assertEqual(rf'\\?\{path}', normpath(path))
+
+
+class WinPrefixLongpathTest(PicardTestCase):
+
+    def test_win_prefix_longpath_is_long(self):
+        path = rf'C:\foo\{253 * "a"}'
+        self.assertEqual(rf'\\?\{path}', win_prefix_longpath(path))
+
+    def test_win_prefix_longpath_is_short(self):
+        path = rf'C:\foo\{252 * "a"}'
+        self.assertEqual(path, win_prefix_longpath(path))
+
+    def test_win_prefix_longpath_unc(self):
+        path = rf'\\server\{251 * "a"}'
+        self.assertEqual(rf'\\?\UNC{path[1:]}', win_prefix_longpath(path))
+
+    def test_win_prefix_longpath_already_prefixed(self):
+        path = r'\\?\C:\foo'
+        self.assertEqual(path, win_prefix_longpath(path))
+
+    def test_win_prefix_longpath_already_prefixed_unc(self):
+        path = r'\\?\server\someshare'
+        self.assertEqual(path, win_prefix_longpath(path))
+
+
+class SystemSupportsLongPathsTest(PicardTestCase):
+
+    def setUp(self):
+        super().setUp()
+        try:
+            del system_supports_long_paths._supported
+        except AttributeError:
+            pass
+
+    def test_system_supports_long_paths_returns_bool(self):
+        result = system_supports_long_paths()
+        self.assertTrue(isinstance(result, bool))
+
+    @unittest.skipIf(IS_WIN, "non-windows test")
+    def test_system_supports_long_paths(self):
+        self.assertTrue(system_supports_long_paths())
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    @patch('winreg.OpenKey')
+    @patch('winreg.QueryValueEx')
+    def test_system_supports_long_paths_windows_unsupported(self, mock_query_value, mock_open_key):
+        mock_query_value.return_value = [0]
+        self.assertFalse(system_supports_long_paths())
+        mock_open_key.assert_called_once()
+        mock_query_value.assert_called_once()
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    @patch('winreg.OpenKey')
+    @patch('winreg.QueryValueEx')
+    def test_system_supports_long_paths_windows_supported(self, mock_query_value, mock_open_key):
+        mock_query_value.return_value = [1]
+        self.assertTrue(system_supports_long_paths())
+        mock_open_key.assert_called_once()
+        mock_query_value.assert_called_once()
+
+    @unittest.skipUnless(IS_WIN, "windows test")
+    @patch('winreg.OpenKey')
+    @patch('winreg.QueryValueEx')
+    def test_system_supports_long_paths_cache(self, mock_query_value, mock_open_key):
+        mock_query_value.return_value = [1]
+        self.assertTrue(system_supports_long_paths())
+        self.assertTrue(system_supports_long_paths._supported)
+        mock_query_value.return_value = [0]
+        self.assertTrue(system_supports_long_paths())
+        mock_open_key.assert_called_once()
+        mock_query_value.assert_called_once()
+
+
+class IterExceptionChainTest(PicardTestCase):
+
+    def test_iter_exception_chain(self):
+        e1 = Mock(name='e1')
+        e2 = Mock(name='e2')
+        e3 = Mock(name='e3')
+        e4 = Mock(name='e4')
+        e5 = Mock(name='e5')
+        e1.__context__ = e2
+        e2.__context__ = e3
+        e2.__cause__ = e4
+        e1.__cause__ = e5
+        self.assertEqual([e1, e2, e3, e4, e5], list(iter_exception_chain(e1)))
+
+
+class AnyExceptionIsinstanceTest(PicardTestCase):
+
+    def test_any_exception_isinstance_itself(self):
+        ex = RuntimeError()
+        self.assertTrue(any_exception_isinstance(ex, RuntimeError))
+
+    def test_any_exception_isinstance_context(self):
+        ex = Mock()
+        self.assertFalse(any_exception_isinstance(ex, RuntimeError))
+        ex.__context__ = RuntimeError()
+        self.assertTrue(any_exception_isinstance(ex, RuntimeError))
+
+    def test_any_exception_isinstance_cause(self):
+        ex = Mock()
+        self.assertFalse(any_exception_isinstance(ex, RuntimeError))
+        ex.__cause__ = RuntimeError()
+        self.assertTrue(any_exception_isinstance(ex, RuntimeError))
+
+    def test_any_exception_isinstance_nested(self):
+        ex = Mock()
+        self.assertFalse(any_exception_isinstance(ex, RuntimeError))
+        ex.__cause__ = Mock()
+        ex.__cause__.__context__ = RuntimeError()
+        self.assertTrue(any_exception_isinstance(ex, RuntimeError))
+
+
+class IgnoreUpdatesContextTest(PicardTestCase):
+
+    def test_enter_exit(self):
+        context = IgnoreUpdatesContext()
+        self.assertFalse(context)
+        with context:
+            self.assertTrue(context)
+        self.assertFalse(context)
+
+    def test_run_on_exit(self):
+        on_exit = Mock()
+        context = IgnoreUpdatesContext(on_exit=on_exit)
+        with context:
+            on_exit.assert_not_called()
+        on_exit.assert_called_once_with()
+
+    def test_run_on_exit_nested(self):
+        on_exit = Mock()
+        context = IgnoreUpdatesContext(on_exit=on_exit)
+        with context:
+            with context:
+                on_exit.assert_not_called()
+            self.assertEqual(len(on_exit.mock_calls), 1)
+        self.assertEqual(len(on_exit.mock_calls), 2)
+
+    def test_run_on_last_exit(self):
+        on_last_exit = Mock()
+        context = IgnoreUpdatesContext(on_last_exit=on_last_exit)
+        with context:
+            on_last_exit.assert_not_called()
+        on_last_exit.assert_called_once_with()
+
+    def test_run_on_last_exit_nested(self):
+        on_last_exit = Mock()
+        context = IgnoreUpdatesContext(on_last_exit=on_last_exit)
+        with context:
+            with context:
+                on_last_exit.assert_not_called()
+            on_last_exit.assert_not_called()
+        on_last_exit.assert_called_once_with()
+
+    def test_run_on_enter(self):
+        on_enter = Mock()
+        context = IgnoreUpdatesContext(on_enter=on_enter)
+        with context:
+            on_enter.assert_called()
+        on_enter.assert_called_once_with()
+
+    def test_run_on_enter_nested(self):
+        on_enter = Mock()
+        context = IgnoreUpdatesContext(on_enter=on_enter)
+        with context:
+            self.assertEqual(len(on_enter.mock_calls), 1)
+            with context:
+                self.assertEqual(len(on_enter.mock_calls), 2)
+
+    def test_run_on_first_enter(self):
+        on_first_enter = Mock()
+        context = IgnoreUpdatesContext(on_first_enter=on_first_enter)
+        with context:
+            on_first_enter.assert_called()
+        on_first_enter.assert_called_once_with()
+
+    def test_run_on_first_enter_nested(self):
+        on_first_enter = Mock()
+        context = IgnoreUpdatesContext(on_first_enter=on_first_enter)
+        with context:
+            on_first_enter.assert_called_once_with()
+            with context:
+                on_first_enter.assert_called_once_with()
+
+    def test_nested_with(self):
+        context = IgnoreUpdatesContext()
+        with context:
+            with context:
+                self.assertTrue(context)
+            self.assertTrue(context)
+        self.assertFalse(context)
+
+
+class DetectUnicodeEncodingTest(PicardTestCase):
+
+    @unittest.skipUnless(charset_detect, "test requires charset_normalizer or chardet package")
+    def test_detect_file_encoding_bom(self):
+        boms = {
+            b'\xff\xfe': 'utf-16-le',
+            b'\xfe\xff': 'utf-16-be',
+            b'\xff\xfe\x00\x00': 'utf-32-le',
+            b'\x00\x00\xfe\xff': 'utf-32-be',
+            b'\xef\xbb\xbf': 'utf-8-sig',
+            b'': 'utf-8',
+            b'\00': 'utf-8',
+            b'no BOM, only ASCII': 'utf-8',
+        }
+        for bom, expected_encoding in boms.items():
+            try:
+                f = NamedTemporaryFile(delete=False)
+                f.write(bom)
+                f.close()
+                encoding = detect_file_encoding(f.name)
+                self.assertEqual(expected_encoding, encoding,
+                                 f'BOM {bom!r} detected as {encoding}, expected {expected_encoding}')
+            finally:
+                f.close()
+                os.remove(f.name)
+
+    def test_detect_file_encoding_eac_utf_16_le(self):
+        expected_encoding = 'utf-16-le'
+        file_path = get_test_data_path('eac-utf16le.log')
+        self.assertEqual(expected_encoding, detect_file_encoding(file_path))
+
+    def test_detect_file_encoding_eac_utf_32_le(self):
+        expected_encoding = 'utf-32-le'
+        file_path = get_test_data_path('eac-utf32le.log')
+        self.assertEqual(expected_encoding, detect_file_encoding(file_path))
+
+    @unittest.skipUnless(charset_detect, "test requires charset_normalizer or chardet package")
+    def test_detect_file_encoding_eac_windows_1251(self):
+        expected_encoding = 'windows-1251'
+        file_path = get_test_data_path('eac-windows1251.log')
+        self.assertEqual(expected_encoding, detect_file_encoding(file_path))
+
+
+class TitlecaseTest(PicardTestCase):
+
+    def test_titlecase(self):
+        tests = (
+            # empty string
+            ('', ''),
+            # simple cases
+            ('hello world', 'Hello World'),
+            ('Hello World', 'Hello World'),
+            ('HELLO WORLD', 'HELLO WORLD'),
+            # contractions and possessives
+            ("children's music", "Children's Music"),
+            ("CHILDREN'S MUSIC", "CHILDREN'S MUSIC"),
+            ("don't stop", "Don't Stop"),
+            # hyphenated words
+            ('first-class ticket', 'First-Class Ticket'),
+            ('FIRST-CLASS ticket', 'FIRST-CLASS Ticket'),
+            # multiple spaces
+            ('hello   world', 'Hello   World'),
+            # punctuation
+            ('hello, world!', 'Hello, World!'),
+            ('hello... world', 'Hello... World'),
+            # special characters
+            ('über café', 'Über Café'),
+            ('españa', 'España'),
+            ('ñandu', 'Ñandu'),
+            # single character words
+            ('a b c', 'A B C'),
+            # numbers
+            ('2001 a space odyssey', '2001 A Space Odyssey'),
+            # preserves existing capitalization after first letter
+            ('MacDonald had a farm', 'MacDonald Had A Farm'),
+            ('LaTeX document', 'LaTeX Document'),
+            # mixed case
+            ('mIxEd CaSe', 'MIxEd CaSe'),
+            # unicode boundaries
+            ('hello—world', 'Hello—World'),
+            ('hello\u2014world', 'Hello\u2014World'),
+            # preserves all caps
+            ('IBM PC', 'IBM PC'),
+            # single letter
+            ('a', 'A'),
+            ('A', 'A'),
+        )
+        for input, expected in tests:
+            self.assertEqual(expected, titlecase(input))

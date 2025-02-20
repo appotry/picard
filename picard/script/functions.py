@@ -4,22 +4,23 @@
 #
 # Copyright (C) 2006-2009, 2012 Lukáš Lalinský
 # Copyright (C) 2007 Javier Kohen
-# Copyright (C) 2008-2011, 2014-2015, 2018-2021 Philipp Wolfer
+# Copyright (C) 2008-2011, 2014-2015, 2018-2024 Philipp Wolfer
 # Copyright (C) 2009 Carlin Mangar
 # Copyright (C) 2009 Nikolai Prokoschenko
 # Copyright (C) 2011-2012 Michael Wiencek
 # Copyright (C) 2012 Chad Wilson
 # Copyright (C) 2012 stephen
 # Copyright (C) 2012, 2014, 2017, 2021 Wieland Hoffmann
-# Copyright (C) 2013-2014, 2017-2021 Laurent Monin
+# Copyright (C) 2013-2014, 2017-2024 Laurent Monin
 # Copyright (C) 2014, 2017, 2021 Sophist-UK
 # Copyright (C) 2016-2017 Sambhav Kothari
 # Copyright (C) 2016-2017 Ville Skyttä
 # Copyright (C) 2017-2018 Antonio Larrosa
 # Copyright (C) 2018 Calvin Walton
 # Copyright (C) 2018 virusMac
-# Copyright (C) 2020-2021 Bob Swift
+# Copyright (C) 2020-2022 Bob Swift
 # Copyright (C) 2021 Adam James
+# Copyright (C) 2024 Arnab Chakraborty
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -39,140 +40,26 @@
 from collections import namedtuple
 import datetime
 from functools import reduce
-from inspect import getfullargspec
 import operator
 import re
-import unicodedata
 
 from picard.const.countries import RELEASE_COUNTRIES
+from picard.extension_points.script_functions import script_function
+from picard.i18n import (
+    N_,
+    gettext_countries,
+)
 from picard.metadata import MULTI_VALUED_JOINER
 from picard.script.parser import (
     MultiValue,
-    ScriptParser,
     ScriptRuntimeError,
     normalize_tagname,
 )
 from picard.util import (
     pattern_as_regex,
+    titlecase,
     uniqify,
 )
-
-
-try:
-    from markdown import markdown
-except ImportError:
-    markdown = None
-
-
-Bound = namedtuple("Bound", ["lower", "upper"])
-
-
-class FunctionRegistryItem:
-    def __init__(self, function, eval_args, argcount, documentation=None,
-                 name=None, module=None):
-        self.function = function
-        self.eval_args = eval_args
-        self.argcount = argcount
-        self.documentation = documentation
-        self.name = name
-        self.module = module
-
-    def __repr__(self):
-        return '{classname}({me.function}, {me.eval_args}, {me.argcount}, {doc})'.format(
-            classname=self.__class__.__name__,
-            me=self,
-            doc='"""{0}"""'.format(self.documentation) if self.documentation else None
-        )
-
-    def _postprocess(self, data, postprocessor):
-        if postprocessor is not None:
-            data = postprocessor(data, function=self)
-        return data
-
-    def markdowndoc(self, postprocessor=None):
-        if self.documentation is not None:
-            ret = _(self.documentation)
-        else:
-            ret = ''
-        return self._postprocess(ret, postprocessor)
-
-    def htmldoc(self, postprocessor=None):
-        if markdown is not None:
-            ret = markdown(self.markdowndoc())
-        else:
-            ret = ''
-        return self._postprocess(ret, postprocessor)
-
-
-def register_script_function(function, name=None, eval_args=True,
-                             check_argcount=True, documentation=None):
-    """Registers a script function. If ``name`` is ``None``,
-    ``function.__name__`` will be used.
-    If ``eval_args`` is ``False``, the arguments will not be evaluated before being
-    passed to ``function``.
-    If ``check_argcount`` is ``False`` the number of arguments passed to the
-    function will not be verified."""
-
-    args, varargs, varkw, defaults, kwonlyargs, kwonlydefaults, annotations = getfullargspec(function)
-
-    required_kwonlyargs = len(kwonlyargs)
-    if kwonlydefaults is not None:
-        required_kwonlyargs -= len(kwonlydefaults.keys())
-    if required_kwonlyargs:
-        raise TypeError("Functions with required keyword-only parameters are not supported")
-
-    args = len(args) - 1  # -1 for the parser
-    varargs = varargs is not None
-    defaults = len(defaults) if defaults else 0
-
-    argcount = Bound(args - defaults, args if not varargs else None)
-
-    if name is None:
-        name = function.__name__
-    ScriptParser._function_registry.register(
-        function.__module__,
-        (
-            name,
-            FunctionRegistryItem(
-                function,
-                eval_args,
-                argcount if argcount and check_argcount else False,
-                documentation=documentation,
-                name=name,
-                module=function.__module__,
-            )
-        )
-    )
-
-
-def script_function(name=None, eval_args=True, check_argcount=True, prefix='func_', documentation=None):
-    """Decorator helper to register script functions
-
-    It calls ``register_script_function()`` and share same arguments
-    Extra optional arguments:
-        ``prefix``: define the prefix to be removed from defined function to name script function
-                    By default, ``func_foo`` will create ``foo`` script function
-
-    Example:
-        @script_function(eval_args=False)
-        def func_myscriptfunc():
-            ...
-    """
-    def script_function_decorator(func):
-        fname = func.__name__
-        if name is None and prefix and fname.startswith(prefix):
-            sname = fname[len(prefix):]
-        else:
-            sname = name
-        register_script_function(
-            func,
-            name=sname,
-            eval_args=eval_args,
-            check_argcount=check_argcount,
-            documentation=documentation
-        )
-        return func
-    return script_function_decorator
 
 
 def _compute_int(operation, *args):
@@ -197,7 +84,7 @@ def func_if(parser, _if, _then, _else=None):
 
 
 @script_function(eval_args=False, documentation=N_(
-    """`$if2(a1,a2,a3,...)`
+    """`$if2(a1,a2,a3,…)`
 
 Returns first non empty argument."""
 ))
@@ -210,7 +97,7 @@ def func_if2(parser, *args):
 
 
 @script_function(eval_args=False, documentation=N_(
-    """`$noop(...)`
+    """`$noop(…)`
 
 Does nothing (useful for comments or disabling a block of code)."""
 ))
@@ -227,7 +114,7 @@ def func_left(parser, text, length):
     try:
         return text[:int(length)]
     except ValueError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -239,7 +126,7 @@ def func_right(parser, text, length):
     try:
         return text[-int(length):]
     except ValueError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -270,7 +157,7 @@ def func_pad(parser, text, length, char):
     try:
         return char * (int(length) - len(text)) + text
     except ValueError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -324,9 +211,9 @@ Returns true, if `x` contains `y`."""
 ))
 def func_in(parser, text, needle):
     if needle in text:
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
 
 
 @script_function(eval_args=False, documentation=N_(
@@ -366,15 +253,15 @@ def func_rreplace(parser, text, old, new):
 ))
 def func_rsearch(parser, text, pattern):
     try:
-        match = re.search(pattern, text)
+        match_ = re.search(pattern, text)
     except re.error:
-        return ""
-    if match:
+        return ''
+    if match_:
         try:
-            return match.group(1)
+            return match_.group(1)
         except IndexError:
-            return match.group(0)
-    return ""
+            return match_.group(0)
+    return ''
 
 
 @script_function(documentation=N_(
@@ -386,7 +273,7 @@ def func_num(parser, text, length):
     try:
         format_ = "%%0%dd" % max(0, min(int(length), 20))
     except ValueError:
-        return ""
+        return ''
     try:
         value = int(text)
     except ValueError:
@@ -409,9 +296,9 @@ def func_unset(parser, name):
         for key in list(parser.context.keys()):
             if key.startswith(name):
                 parser.context.unset(key)
-        return ""
+        return ''
     parser.context.unset(name)
-    return ""
+    return ''
 
 
 @script_function(documentation=N_(
@@ -426,7 +313,7 @@ _Since Picard 2.1_"""
 ))
 def func_delete(parser, name):
     parser.context.delete(normalize_tagname(name))
-    return ""
+    return ''
 
 
 @script_function(documentation=N_(
@@ -444,7 +331,7 @@ def func_set(parser, name, value):
         parser.context[normalize_tagname(name)] = value
     else:
         func_unset(parser, name)
-    return ""
+    return ''
 
 
 @script_function(documentation=N_(
@@ -488,25 +375,27 @@ def func_copy(parser, new, old):
     new = normalize_tagname(new)
     old = normalize_tagname(old)
     parser.context[new] = parser.context.getall(old)[:]
-    return ""
+    return ''
 
 
 @script_function(documentation=N_(
-    """`$copymerge(new,old)`
+    """`$copymerge(new,old[,keep_duplicates])`
 
 Merges metadata from variable `old` into `new`, removing duplicates and
     appending to the end, so retaining the original ordering. Like `$copy`, this
     will also copy multi-valued variables without flattening them.
 
+If `keep_duplicates` is set, then the duplicates will not be removed from the result.
+
 _Since Picard 1.0_"""
 ))
-def func_copymerge(parser, new, old):
+def func_copymerge(parser, new, old, keep_duplicates=False):
     new = normalize_tagname(new)
     old = normalize_tagname(old)
     newvals = parser.context.getall(new)
     oldvals = parser.context.getall(old)
-    parser.context[new] = uniqify(newvals + oldvals)
-    return ""
+    parser.context[new] = newvals + oldvals if keep_duplicates else uniqify(newvals + oldvals)
+    return ''
 
 
 @script_function(documentation=N_(
@@ -523,7 +412,7 @@ def func_trim(parser, text, char=None):
 
 
 @script_function(documentation=N_(
-    """`$add(x,y,...)`
+    """`$add(x,y,…)`
 
 Add `y` to `x`.
 Can be used with an arbitrary number of arguments.
@@ -537,11 +426,11 @@ def func_add(parser, x, y, *args):
     try:
         return _compute_int(operator.add, x, y, *args)
     except ValueError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
-    """`$sub(x,y,...)`
+    """`$sub(x,y,…)`
 
 Subtracts `y` from `x`.
 Can be used with an arbitrary number of arguments.
@@ -555,11 +444,11 @@ def func_sub(parser, x, y, *args):
     try:
         return _compute_int(operator.sub, x, y, *args)
     except ValueError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
-    """`$div(x,y,...)`
+    """`$div(x,y,…)`
 
 Divides `x` by `y`.
 Can be used with an arbitrary number of arguments.
@@ -573,13 +462,13 @@ def func_div(parser, x, y, *args):
     try:
         return _compute_int(operator.floordiv, x, y, *args)
     except ValueError:
-        return ""
+        return ''
     except ZeroDivisionError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
-    """`$mod(x,y,...)`
+    """`$mod(x,y,…)`
 
 Returns the remainder of `x` divided by `y`.
 Can be used with an arbitrary number of arguments.
@@ -593,11 +482,11 @@ def func_mod(parser, x, y, *args):
     try:
         return _compute_int(operator.mod, x, y, *args)
     except (ValueError, ZeroDivisionError):
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
-    """`$mul(x,y,...)`
+    """`$mul(x,y,…)`
 
 Multiplies `x` by `y`.
 Can be used with an arbitrary number of arguments.
@@ -611,11 +500,11 @@ def func_mul(parser, x, y, *args):
     try:
         return _compute_int(operator.mul, x, y, *args)
     except ValueError:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
-    """`$or(x,y,...)`
+    """`$or(x,y,…)`
 
 Returns true if either `x` or `y` not empty.
     Can be used with an arbitrary number of arguments.
@@ -623,13 +512,13 @@ Returns true if either `x` or `y` not empty.
 ))
 def func_or(parser, x, y, *args):
     if _compute_logic(any, x, y, *args):
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
-    """`$and(x,y,...)`
+    """`$and(x,y,…)`
 
 Returns true if both `x` and `y` are not empty.
     Can be used with an arbitrary number of arguments.
@@ -637,9 +526,9 @@ Returns true if both `x` and `y` are not empty.
 ))
 def func_and(parser, x, y, *args):
     if _compute_logic(all, x, y, *args):
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -649,9 +538,9 @@ Returns true if `x` is empty."""
 ))
 def func_not(parser, x):
     if not x:
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -661,9 +550,9 @@ Returns true if `x` equals `y`."""
 ))
 def func_eq(parser, x, y):
     if x == y:
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -673,65 +562,102 @@ Returns true if `x` does not equal `y`."""
 ))
 def func_ne(parser, x, y):
     if x != y:
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
+
+
+def _cmp(op, x, y, _type):
+    """Compare x vs y using op method and specified _type
+       op is expected to be a method from operator module
+    """
+    if not _type:
+        _type = 'auto'
+    _typer = None
+    if _type == 'auto':
+        _type = 'text'
+        for _test_type in (int, float):
+            try:
+                _type = (_test_type(x), _test_type(y))
+                _type = _test_type.__name__
+                break
+            except ValueError:
+                pass
+    if _type == 'text':
+        return '1' if op(x, y) else ""
+    elif _type == 'nocase':
+        return '1' if op(x.lower(), y.lower()) else ""
+    elif _type == 'float':
+        _typer = float
+    elif _type == 'int':
+        _typer = int
+    if _typer is not None:
+        try:
+            if op(_typer(x), _typer(y)):
+                return '1'
+        except ValueError:
+            pass
+    return ''
 
 
 @script_function(documentation=N_(
-    """`$lt(x,y)`
+    """`$lt(x,y[,type])`
 
-Returns true if `x` is less than `y`."""
+Returns true if `x` is less than `y` using the comparison specified in `type`.
+Possible values of `type` are "int" (integer), "float" (floating point), "text"
+(case-sensitive text), "nocase" (case-insensitive text) and "auto" (automatically
+determine the type of arguments provided), with "auto" used as the default
+comparison method if `type` is not specified.  The "auto" type will use the
+first type that applies to both arguments in the following order of preference:
+"int", "float" and "text"."""
 ))
-def func_lt(parser, x, y):
-    try:
-        if int(x) < int(y):
-            return "1"
-    except ValueError:
-        pass
-    return ""
+def func_lt(parser, x, y, _type=None):
+    return _cmp(operator.lt, x, y, _type)
 
 
 @script_function(documentation=N_(
-    """`$lte(x,y)`
+    """`$lte(x,y[,type])`
 
-Returns true if `x` is less than or equal to `y`."""
+Returns true if `x` is less than or equal to `y` using the comparison specified in `type`.
+Possible values of `type` are "int" (integer), "float" (floating point), "text"
+(case-sensitive text), "nocase" (case-insensitive text) and "auto" (automatically
+determine the type of arguments provided), with "auto" used as the default
+comparison method if `type` is not specified.  The "auto" type will use the
+first type that applies to both arguments in the following order of preference:
+"int", "float" and "text"."""
 ))
-def func_lte(parser, x, y):
-    try:
-        if int(x) <= int(y):
-            return "1"
-    except ValueError:
-        pass
-    return ""
+def func_lte(parser, x, y, _type=None):
+    return _cmp(operator.le, x, y, _type)
 
 
 @script_function(documentation=N_(
-    """`$gt(x,y)`
+    """`$gt(x,y[,type])`
 
-Returns true if `x` is greater than `y`."""
+Returns true if `x` is greater than `y` using the comparison specified in `type`.
+Possible values of `type` are "int" (integer), "float" (floating point), "text"
+(case-sensitive text), "nocase" (case-insensitive text) and "auto" (automatically
+determine the type of arguments provided), with "auto" used as the default
+comparison method if `type` is not specified.  The "auto" type will use the
+first type that applies to both arguments in the following order of preference:
+"int", "float" and "text"."""
 ))
-def func_gt(parser, x, y):
-    try:
-        if int(x) > int(y):
-            return "1"
-    except ValueError:
-        pass
-    return ""
+def func_gt(parser, x, y, _type=None):
+    return _cmp(operator.gt, x, y, _type)
 
 
 @script_function(documentation=N_(
-    """`$gte(x,y)`
+    """`$gte(x,y[,type])`
 
-Returns true if `x` is greater than or equal to `y`."""
+Returns true if `x` is greater than or equal to `y` using the comparison specified in `type`.
+Possible values of `type` are "int" (integer), "float" (floating point), "text"
+(case-sensitive text), "nocase" (case-insensitive text) and "auto" (automatically
+determine the type of arguments provided), with "auto" used as the default
+comparison method if `type` is not specified.  The "auto" type will use the
+first type that applies to both arguments in the following order of preference:
+"int", "float" and "text"."""
 ))
-def func_gte(parser, x, y):
-    try:
-        if int(x) >= int(y):
-            return "1"
-    except ValueError:
-        pass
-    return ""
+def func_gte(parser, x, y, _type=None):
+    return _cmp(operator.ge, x, y, _type)
 
 
 @script_function(documentation=N_(
@@ -795,9 +721,9 @@ _Since Picard 0.12_"""
 def func_matchedtracks(parser, *args):
     # only works in file naming scripts, always returns zero in tagging scripts
     file = parser.file
-    if file and file.parent and hasattr(file.parent, 'album') and file.parent.album:
-        return str(parser.file.parent.album.get_num_matched_tracks())
-    return "0"
+    if file and file.parent_item and hasattr(file.parent_item, 'album') and file.parent_item.album:
+        return str(parser.file.parent_item.album.get_num_matched_tracks())
+    return '0'
 
 
 @script_function(documentation=N_(
@@ -809,10 +735,10 @@ Returns true if every track in the album is matched to a single file.
 def func_is_complete(parser):
     # only works in file naming scripts, always returns zero in tagging scripts
     file = parser.file
-    if (file and file.parent and hasattr(file.parent, 'album') and file.parent.album
-            and file.parent.album.is_complete()):
-        return "1"
-    return ""
+    if (file and file.parent_item and hasattr(file.parent_item, 'album') and file.parent_item.album
+            and file.parent_item.album.is_complete()):
+        return '1'
+    return ''
 
 
 @script_function(documentation=N_(
@@ -842,7 +768,7 @@ Returns the first character of each word in `text`, if it is an alphabetic chara
 _Since Picard 0.12_"""
 ))
 def func_initials(parser, text=""):
-    return "".join(a[:1] for a in text.split(" ") if a[:1].isalpha())
+    return ''.join(a[:1] for a in text.split(" ") if a[:1].isalpha())
 
 
 @script_function(documentation=N_(
@@ -877,8 +803,8 @@ _Since Picard 1.4_"""
 ))
 def func_startswith(parser, text, prefix):
     if text.startswith(prefix):
-        return "1"
-    return ""
+        return '1'
+    return ''
 
 
 @script_function(documentation=N_(
@@ -890,8 +816,8 @@ _Since Picard 1.4_"""
 ))
 def func_endswith(parser, text, suffix):
     if text.endswith(suffix):
-        return "1"
-    return ""
+        return '1'
+    return ''
 
 
 @script_function(documentation=N_(
@@ -910,7 +836,7 @@ def func_truncate(parser, text, length):
 
 
 @script_function(check_argcount=False, documentation=N_(
-    """`$swapprefix(text,prefix1,prefix2,...)`
+    """`$swapprefix(text,prefix1,prefix2,…)`
 
 Moves the specified prefixes from the beginning to the end of `text`. Multiple
 prefixes can be specified as separate parameters. If no prefix is specified 'A'
@@ -932,7 +858,7 @@ def func_swapprefix(parser, text, *prefixes):
 
 
 @script_function(check_argcount=False, documentation=N_(
-    """`$delprefix(text,prefix1,prefix2,...)`
+    """`$delprefix(text,prefix1,prefix2,…)`
 
 Deletes the specified prefixes from the beginning of `text`. Multiple
 prefixes can be specified as separate parameters.  If no prefix is specified 'A'
@@ -962,18 +888,18 @@ def _delete_prefix(parser, text, *prefixes):
         prefixes = ('A', 'The')
     text = text.strip()
     rx = '(' + r'\s+)|('.join(map(re.escape, prefixes)) + r'\s+)'
-    match = re.match(rx, text)
-    if match:
-        pref = match.group()
+    match_ = re.match(rx, text)
+    if match_:
+        pref = match_.group()
         return text[len(pref):], pref.strip()
     return text, ''
 
 
 @script_function(check_argcount=False, documentation=N_(
-    """`$eq_any(x,a1,a2,...)`
+    """`$eq_any(x,a1,a2,…)`
 
-Returns true if `x` equals `a1` or `a2` or ...
-Functionally equivalent to `$or($eq(x,a1),$eq(x,a2),...)`.
+Returns true if `x` equals `a1` or `a2` or …
+Functionally equivalent to `$or($eq(x,a1),$eq(x,a2),…)`.
 Functionally equivalent to the eq2 plugin."""
 ))
 def func_eq_any(parser, x, *args):
@@ -982,10 +908,10 @@ def func_eq_any(parser, x, *args):
 
 
 @script_function(check_argcount=False, documentation=N_(
-    """`$ne_all(x,a1,a2,...)`
+    """`$ne_all(x,a1,a2,…)`
 
-Returns true if `x` does not equal `a1` and `a2` and ...
-Functionally equivalent to `$and($ne(x,a1),$ne(x,a2),...)`.
+Returns true if `x` does not equal `a1` and `a2` and …
+Functionally equivalent to `$and($ne(x,a1),$ne(x,a2),…)`.
 Functionally equivalent to the ne2 plugin."""
 ))
 def func_ne_all(parser, x, *args):
@@ -994,10 +920,10 @@ def func_ne_all(parser, x, *args):
 
 
 @script_function(check_argcount=False, documentation=N_(
-    """`$eq_all(x,a1,a2,...)`
+    """`$eq_all(x,a1,a2,…)`
 
-Returns true if `x` equals `a1` and `a2` and ...
-Functionally equivalent to `$and($eq(x,a1),$eq(x,a2),...)`.
+Returns true if `x` equals `a1` and `a2` and …
+Functionally equivalent to `$and($eq(x,a1),$eq(x,a2),…)`.
 
 Example:
 
@@ -1012,10 +938,10 @@ def func_eq_all(parser, x, *args):
 
 
 @script_function(check_argcount=False, documentation=N_(
-    """`$ne_any(x,a1,a2,...)`
+    """`$ne_any(x,a1,a2,…)`
 
-Returns true if `x` does not equal `a1` or `a2` or ...
-Functionally equivalent to `$or($ne(x,a1),$ne(x,a2),...)`.
+Returns true if `x` does not equal `a1` or `a2` or …
+Functionally equivalent to `$or($ne(x,a1),$ne(x,a2),…)`.
 
 Example:
 
@@ -1037,33 +963,7 @@ Example:
 _Since Picard 2.1_"""
 ))
 def func_title(parser, text):
-    # GPL 2.0 licensed code by Javier Kohen, Sambhav Kothari
-    # from https://github.com/metabrainz/picard-plugins/blob/2.0/plugins/titlecase/titlecase.py
-    if not text:
-        return text
-    capitalized = text[0].capitalize()
-    capital = False
-    for i in range(1, len(text)):
-        t = text[i]
-        if t in "’'" and text[i-1].isalpha():
-            capital = False
-        elif iswbound(t):
-            capital = True
-        elif capital and t.isalpha():
-            capital = False
-            t = t.capitalize()
-        else:
-            capital = False
-        capitalized += t
-    return capitalized
-
-
-def iswbound(char):
-    # GPL 2.0 licensed code by Javier Kohen, Sambhav Kothari
-    # from https://github.com/metabrainz/picard-plugins/blob/2.0/plugins/titlecase/titlecase.py
-    """ Checks whether the given character is a word boundary """
-    category = unicodedata.category(char)
-    return "Zs" == category or "Sk" == category or "P" == category[0]
+    return titlecase(text)
 
 
 @script_function(documentation=N_(
@@ -1075,23 +975,23 @@ _Since Picard 2.2_"""
 ))
 def func_is_audio(parser):
     if func_is_video(parser) == "1":
-        return ""
+        return ''
     else:
-        return "1"
+        return '1'
 
 
 @script_function(documentation=N_(
     """`$is_video()`
 
-Returns true, if the file processed is an video file.
+Returns true, if the file processed is a video file.
 
 _Since Picard 2.2_"""
 ))
 def func_is_video(parser):
     if parser.context['~video'] and parser.context['~video'] != '0':
-        return "1"
+        return '1'
     else:
-        return ""
+        return ''
 
 
 @script_function(documentation=N_(
@@ -1121,7 +1021,7 @@ def func_reverse(parser, text):
 
 
 @script_function(documentation=N_(
-    """`$substr(text,start,end)`
+    """`$substr(text,start[,end])`
 
 Returns the substring beginning with the character at the `start` index, up to
     (but not including) the character at the `end` index. Indexes are
@@ -1129,7 +1029,7 @@ Returns the substring beginning with the character at the `start` index, up to
     string. If the `start` or `end` indexes are left blank, they will default to
     the start and end of the string respectively."""
 ))
-def func_substr(parser, text, start_index, end_index):
+def func_substr(parser, text, start_index, end_index=None):
     try:
         start = int(start_index) if start_index else None
     except ValueError:
@@ -1258,12 +1158,13 @@ Returns a multi-value variable containing the elements between the `start` and
 The following example will create a multi-value variable with all artists
     in `%artists%` except the first, which can be used to create a "feat." list.
 
-Example:
+Examples:
 
-    $setmulti(supporting_artists,$slice(%artists%,1,))
+    $setmulti(supporting_artists,$slice(%artists%,1))
+    $setmulti(supporting_artists,$slice(%artists%,1,-1))
 """
 ))
-def func_slice(parser, multi, start_index, end_index, separator=MULTI_VALUED_JOINER):
+def func_slice(parser, multi, start_index, end_index=None, separator=MULTI_VALUED_JOINER):
     try:
         start = int(start_index.eval(parser)) if start_index else None
     except ValueError:
@@ -1493,3 +1394,115 @@ _Since Picard 2.7_"""
 def func_is_multi(parser, multi):
     multi_value = MultiValue(parser, multi, MULTI_VALUED_JOINER)
     return '' if len(multi_value) < 2 else '1'
+
+
+@script_function(eval_args=True, documentation=N_(
+    """`$cleanmulti(name)`
+
+Removes all empty string elements from the multi-value variable.
+
+Example:
+
+    $setmulti(test,one; ; two; three)
+    $cleanmulti(test)
+
+Result: Sets the value of 'test' to ["one", "two", "three"].
+
+_Since Picard 2.8_"""
+))
+def func_cleanmulti(parser, multi):
+    name = normalize_tagname(multi)
+    values = [str(value) for value in parser.context.getall(name) if value or value == 0]
+    parser.context[name] = values
+    return ''
+
+
+def _type_args(_type, *args):
+    haystack = set()
+    # Automatically expand multi-value arguments
+    for item in args:
+        haystack = haystack.union(set(x for x in item.split(MULTI_VALUED_JOINER)))
+    if not _type:
+        _type = 'auto'
+    _typer = None
+    if _type == 'auto':
+        _type = 'text'
+        for _test_type in (int, float):
+            try:
+                _type = set(_test_type(item) for item in haystack)
+                _type = _test_type.__name__
+                break
+            except ValueError:
+                pass
+    _typer = None
+    if _type == 'int':
+        _typer = int
+    elif _type == 'float':
+        _typer = float
+    elif _type in ('text', 'nocase'):
+        pass
+    else:
+        # Unknown processing type
+        raise ValueError
+    if _typer is not None:
+        haystack = set(_typer(item) for item in haystack)
+    return haystack
+
+
+def _extract(_func, _type, *args):
+    try:
+        haystack = _type_args(_type, *args)
+    except ValueError:
+        return ''
+
+    if _type == 'nocase':
+        op = operator.lt if _func == min else operator.gt
+        val = None
+        for item in haystack:
+            if val is None or op(item.lower(), val.lower()):
+                val = item
+        return str(val)
+
+    return str(_func(haystack))
+
+
+@script_function(documentation=N_(
+    """`$min(type,x,…)`
+
+Returns the minimum value using the comparison specified in `type`.
+
+Possible values of `type` are "int" (integer), "float" (floating point), "text"
+(case-sensitive text), "nocase" (case-insensitive text) and "auto" (automatically
+determine the type of arguments provided), with "auto" used as the default
+comparison method if `type` is not specified.  The "auto" type will use the
+first type that applies to both arguments in the following order of preference:
+"int", "float" and "text".
+
+Can be used with an arbitrary number of arguments.  Multi-value arguments
+will be expanded automatically.
+
+_Since Picard 2.9_"""
+))
+def func_min(parser, _type, x, *args):
+    return _extract(min, _type, x, *args)
+
+
+@script_function(documentation=N_(
+    """`$max(type,x,…)`
+
+Returns the maximum value using the comparison specified in `type`.
+
+Possible values of `type` are "int" (integer), "float" (floating point), "text"
+(case-sensitive text), "nocase" (case-insensitive text) and "auto" (automatically
+determine the type of arguments provided), with "auto" used as the default
+comparison method if `type` is not specified.  The "auto" type will use the
+first type that applies to both arguments in the following order of preference:
+"int", "float" and "text".
+
+Can be used with an arbitrary number of arguments.  Multi-value arguments
+will be expanded automatically.
+
+_Since Picard 2.9_"""
+))
+def func_max(parser, _type, x, *args):
+    return _extract(max, _type, x, *args)

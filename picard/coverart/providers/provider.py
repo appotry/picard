@@ -2,7 +2,7 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2014-2015, 2018-2019, 2021 Laurent Monin
+# Copyright (C) 2014-2015, 2018-2019, 2021, 2024 Laurent Monin
 # Copyright (C) 2015 Rahul Raturi
 # Copyright (C) 2016 Ville Skyttä
 # Copyright (C) 2016 Wieland Hoffmann
@@ -57,7 +57,7 @@ class ProviderOptions(OptionsPage):
     PARENT = "cover"
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent=parent)
         self.ui = self._options_ui()
         self.ui.setupUi(self)
 

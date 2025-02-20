@@ -2,9 +2,10 @@
 #
 # Picard, the next-generation MusicBrainz tagger
 #
-# Copyright (C) 2019, 2021 Philipp Wolfer
-# Copyright (C) 2020 Laurent Monin
+# Copyright (C) 2019, 2021-2022, 2024 Philipp Wolfer
+# Copyright (C) 2020-2022 Laurent Monin
 # Copyright (C) 2021 Bob Swift
+# Copyright (C) 2024 Suryansh Shakya
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -172,6 +173,7 @@ class MonkeysAudioTest(CommonApeTests.ApeTestCase):
         '~channels': '2',
         '~sample_rate': '44100',
         '~bits_per_sample': '16',
+        '~filesize': '2432',
     }
     unexpected_info = ['~video']
 
@@ -183,6 +185,7 @@ class WavPackTest(CommonApeTests.ApeTestCase):
         'length': 82,
         '~channels': '2',
         '~sample_rate': '44100',
+        '~filesize': '2478',
     }
     unexpected_info = ['~video']
 
@@ -192,6 +195,7 @@ class WavPackTest(CommonApeTests.ApeTestCase):
         config.setting['move_files'] = False
         config.setting['ascii_filenames'] = False
         config.setting['windows_compatibility'] = False
+        config.setting['windows_long_paths'] = True
         config.setting['dont_write_tags'] = True
         config.setting['preserve_timestamps'] = False
         config.setting['delete_empty_dirs'] = False
@@ -246,6 +250,7 @@ class MusepackSV7Test(CommonApeTests.ApeTestCase):
         'length': 91,
         '~channels': '2',
         '~sample_rate': '44100',
+        '~filesize': '1605',
     }
     unexpected_info = ['~video']
 
@@ -257,6 +262,7 @@ class MusepackSV8Test(CommonApeTests.ApeTestCase):
         'length': 82,
         '~channels': '2',
         '~sample_rate': '44100',
+        '~filesize': '1569',
     }
     unexpected_info = ['~video']
 
@@ -273,7 +279,8 @@ class TAKTest(CommonApeTests.ApeTestCase):
                 'length': 82,
                 '~channels': '2',
                 '~sample_rate': '44100',
-                '~bits_per_sample': '16'
+                '~bits_per_sample': '16',
+                '~filesize': '2080',
             }
 
 
@@ -284,6 +291,7 @@ class OptimFROGLosslessTest(CommonApeTests.ApeTestCase):
         'length': 0,
         '~channels': '2',
         '~sample_rate': '48000',
+        '~filesize': '117',
     }
     unexpected_info = ['~video']
 
@@ -299,6 +307,7 @@ class OptimFROGDUalStreamTest(CommonApeTests.ApeTestCase):
         'length': 0,
         '~channels': '2',
         '~sample_rate': '48000',
+        '~filesize': '117',
     }
     unexpected_info = ['~video']
 

@@ -3,8 +3,8 @@
 # Picard, the next-generation MusicBrainz tagger
 #
 # Copyright (C) 2016 Rahul Raturi
-# Copyright (C) 2018-2021 Laurent Monin
-# Copyright (C) 2018-2021 Philipp Wolfer
+# Copyright (C) 2018-2023 Philipp Wolfer
+# Copyright (C) 2018-2024 Laurent Monin
 # Copyright (C) 2020 Ray Bouchard
 #
 # This program is free software; you can redistribute it and/or
@@ -24,7 +24,7 @@
 
 from collections import namedtuple
 
-from PyQt5 import (
+from PyQt6 import (
     QtCore,
     QtGui,
     QtNetwork,
@@ -32,6 +32,7 @@ from PyQt5 import (
 )
 
 from picard.config import get_config
+from picard.i18n import gettext as _
 from picard.util import (
     icontheme,
     restore_method,
@@ -43,15 +44,15 @@ from picard.ui.util import StandardButton
 
 class SearchBox(QtWidgets.QWidget):
 
-    def __init__(self, parent, force_advanced_search=None):
-        super().__init__(parent)
-        self.search_action = QtWidgets.QAction(icontheme.lookup('system-search'), _("Search"), self)
+    def __init__(self, force_advanced_search=None, parent=None):
+        super().__init__(parent=parent)
+        self.search_action = QtGui.QAction(icontheme.lookup('system-search'), _("Search"), self)
         self.search_action.setEnabled(False)
         self.search_action.triggered.connect(self.search)
         if force_advanced_search is None:
             config = get_config()
             self.force_advanced_search = False
-            self.use_advanced_search = config.setting["use_adv_search_syntax"]
+            self.use_advanced_search = config.setting['use_adv_search_syntax']
         else:
             self.force_advanced_search = True
             self.use_advanced_search = force_advanced_search
@@ -76,7 +77,7 @@ class SearchBox(QtWidgets.QWidget):
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.returnPressed.connect(self.trigger_search_action)
         self.search_edit.textChanged.connect(self.enable_search)
-        self.search_edit.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.search_edit.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.search_edit.focusInEvent = self.focus_in_event
         self.search_row_layout.addWidget(self.search_edit)
         self.search_button = QtWidgets.QToolButton(self.search_row_widget)
@@ -88,11 +89,12 @@ class SearchBox(QtWidgets.QWidget):
         self.layout.addWidget(self.search_row_widget)
         self.adv_opt_row_widget = QtWidgets.QWidget(self)
         self.adv_opt_row_layout = QtWidgets.QHBoxLayout(self.adv_opt_row_widget)
-        self.adv_opt_row_layout.setAlignment(QtCore.Qt.AlignLeft)
+        self.adv_opt_row_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         self.adv_opt_row_layout.setContentsMargins(1, 1, 1, 1)
         self.adv_opt_row_layout.setSpacing(1)
         self.use_adv_search_syntax = QtWidgets.QCheckBox(self.adv_opt_row_widget)
         self.use_adv_search_syntax.setText(_("Use advanced query syntax"))
+        self.use_adv_search_syntax.setChecked(self.use_advanced_search)
         self.use_adv_search_syntax.stateChanged.connect(self.update_advanced_syntax_setting)
         self.adv_opt_row_layout.addWidget(self.use_adv_search_syntax)
         self.adv_syntax_help = QtWidgets.QLabel(self.adv_opt_row_widget)
@@ -117,7 +119,7 @@ class SearchBox(QtWidgets.QWidget):
         self.use_advanced_search = self.use_adv_search_syntax.isChecked()
         if not self.force_advanced_search:
             config = get_config()
-            config.setting["use_adv_search_syntax"] = self.use_advanced_search
+            config.setting['use_adv_search_syntax'] = self.use_advanced_search
 
     def enable_search(self):
         if self.query:
@@ -138,7 +140,7 @@ class SearchBox(QtWidgets.QWidget):
     query = property(get_query, set_query)
 
 
-Retry = namedtuple("Retry", ["function", "query"])
+Retry = namedtuple('Retry', ['function', 'query'])
 
 
 class SearchDialog(TableBasedDialog):
@@ -161,22 +163,22 @@ class SearchDialog(TableBasedDialog):
             return self.force_advanced_search
         else:
             config = get_config()
-            return config.setting["use_adv_search_syntax"]
+            return config.setting['use_adv_search_syntax']
 
     def get_value_for_row_id(self, row, value):
         return row
 
     def setupUi(self):
         self.verticalLayout = QtWidgets.QVBoxLayout(self)
-        self.verticalLayout.setObjectName("vertical_layout")
+        self.verticalLayout.setObjectName('vertical_layout')
         if self.show_search:
-            self.search_box = SearchBox(self, force_advanced_search=self.force_advanced_search)
-            self.search_box.setObjectName("search_box")
+            self.search_box = SearchBox(force_advanced_search=self.force_advanced_search, parent=self)
+            self.search_box.setObjectName('search_box')
             self.verticalLayout.addWidget(self.search_box)
         self.center_widget = QtWidgets.QWidget(self)
-        self.center_widget.setObjectName("center_widget")
+        self.center_widget.setObjectName('center_widget')
         self.center_layout = QtWidgets.QVBoxLayout(self.center_widget)
-        self.center_layout.setObjectName("center_layout")
+        self.center_layout.setObjectName('center_layout')
         self.center_layout.setContentsMargins(1, 1, 1, 1)
         self.center_widget.setLayout(self.center_layout)
         self.verticalLayout.addWidget(self.center_widget)
@@ -186,7 +188,7 @@ class SearchDialog(TableBasedDialog):
                 _("Search in browser"), self.buttonBox)
             self.buttonBox.addButton(
                 self.search_browser_button,
-                QtWidgets.QDialogButtonBox.ActionRole)
+                QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
             self.search_browser_button.clicked.connect(self.search_browser)
         self.accept_button = QtWidgets.QPushButton(
             self.accept_button_title,
@@ -194,25 +196,25 @@ class SearchDialog(TableBasedDialog):
         self.accept_button.setEnabled(False)
         self.buttonBox.addButton(
             self.accept_button,
-            QtWidgets.QDialogButtonBox.AcceptRole)
+            QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
         self.buttonBox.addButton(
             StandardButton(StandardButton.CANCEL),
-            QtWidgets.QDialogButtonBox.RejectRole)
+            QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
         self.verticalLayout.addWidget(self.buttonBox)
 
     def show_progress(self):
         progress_widget = QtWidgets.QWidget(self)
-        progress_widget.setObjectName("progress_widget")
+        progress_widget.setObjectName('progress_widget')
         layout = QtWidgets.QVBoxLayout(progress_widget)
-        text_label = QtWidgets.QLabel(_('<strong>Loading...</strong>'), progress_widget)
-        text_label.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom)
+        text_label = QtWidgets.QLabel(_('<strong>Loading…</strong>'), progress_widget)
+        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignBottom)
         gif_label = QtWidgets.QLabel(progress_widget)
         movie = QtGui.QMovie(":/images/loader.gif")
         gif_label.setMovie(movie)
         movie.start()
-        gif_label.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
+        gif_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop)
         layout.addWidget(text_label)
         layout.addWidget(gif_label)
         layout.setContentsMargins(1, 1, 1, 1)
@@ -227,35 +229,36 @@ class SearchDialog(TableBasedDialog):
             show_retry_button -- Whether to display retry button or not
         """
         error_widget = QtWidgets.QWidget(self)
-        error_widget.setObjectName("error_widget")
+        error_widget.setObjectName('error_widget')
         layout = QtWidgets.QVBoxLayout(error_widget)
         error_label = QtWidgets.QLabel(error, error_widget)
         error_label.setWordWrap(True)
-        error_label.setAlignment(QtCore.Qt.AlignCenter)
-        error_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        error_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        error_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(error_label)
         if show_retry_button:
             retry_widget = QtWidgets.QWidget(error_widget)
             retry_layout = QtWidgets.QHBoxLayout(retry_widget)
             retry_button = QtWidgets.QPushButton(_("Retry"), error_widget)
             retry_button.clicked.connect(self.retry)
-            retry_button.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed))
+            retry_button.setSizePolicy(QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed))
             retry_layout.addWidget(retry_button)
-            retry_layout.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
+            retry_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignTop)
             retry_widget.setLayout(retry_layout)
             layout.addWidget(retry_widget)
         error_widget.setLayout(layout)
         self.add_widget_to_center_layout(error_widget)
 
     def network_error(self, reply, error):
+        params = {
+            'url': reply.request().url().toString(QtCore.QUrl.UrlFormattingOption.RemoveUserInfo),
+            'error': reply.errorString(),
+            'qtcode': error,
+            'statuscode': reply.attribute(
+                QtNetwork.QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        }
         error_msg = _("<strong>Following error occurred while fetching results:<br><br></strong>"
-                      "Network request error for %s:<br>%s (QT code %d, HTTP code %s)<br>") % (
-                          reply.request().url().toString(QtCore.QUrl.RemoveUserInfo),
-                          reply.errorString(),
-                          error,
-                          repr(reply.attribute(
-                              QtNetwork.QNetworkRequest.HttpStatusCodeAttribute))
-        )
+                      "Network request error for %(url)s:<br>%(error)s (QT code %(qtcode)d, HTTP code %(statuscode)r)<br>") % params
         self.show_error(error_msg, show_retry_button=True)
 
     def no_results_found(self):
